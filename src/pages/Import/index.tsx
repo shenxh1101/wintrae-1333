@@ -63,7 +63,7 @@ export default function ImportPage() {
 
   useEffect(() => {
     useIssueStore.getState().refreshAssigneeTaskCounts();
-  }, []);
+  }, [products, issues]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -549,12 +549,7 @@ export default function ImportPage() {
                     <span className="text-sm text-success-700">通过检查</span>
                   </div>
                   <span className="font-bold text-success-700">
-                    {products.length -
-                      new Set(
-                        previewData.length > 0
-                          ? []
-                          : []
-                      ).size}
+                    {products.length - new Set(issues.map((i) => i.productId)).size}
                   </span>
                 </div>
                 <div className="flex items-center justify-between p-3 rounded-lg bg-danger-50">
@@ -562,7 +557,9 @@ export default function ImportPage() {
                     <XCircle className="w-4 h-4 text-danger-600" />
                     <span className="text-sm text-danger-700">存在问题</span>
                   </div>
-                  <span className="font-bold text-danger-700">-</span>
+                  <span className="font-bold text-danger-700">
+                    {new Set(issues.map((i) => i.productId)).size}
+                  </span>
                 </div>
 
                 {selectedBatchId !== 'all' && selectedBatch && (

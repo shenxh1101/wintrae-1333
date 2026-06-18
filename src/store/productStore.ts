@@ -177,6 +177,8 @@ export const useProductStore = create<ProductState>((set, get) => ({
   setSelectedBatchId: (batchId) => {
     set({ selectedBatchId: batchId });
     setStorage(SELECTED_BATCH_KEY, batchId);
+    useIssueStore.setState({ selectedBatchFilter: batchId });
+    setStorage('issue_batch_filter', batchId);
   },
 
   setNeedsRecheck: (needs) => {

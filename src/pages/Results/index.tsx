@@ -99,7 +99,7 @@ export default function ResultsPage() {
     if (shouldCheck && products.length > 0) {
       handleRunCheck();
     }
-  }, []);
+  }, [hasChecked, needsRecheck, lastImportedAt, lastCheckedAt, products.length]);
 
   const filteredIssues = getFilteredIssues();
 

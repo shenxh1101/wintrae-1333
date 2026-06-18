@@ -62,7 +62,6 @@ export default function FixesPage() {
     bulkUpdateStatus,
     getFilteredIssues,
     updateIssueStatus,
-    setSelectedBatchFilter,
   } = useIssueStore();
   const { assignees } = useTaskStore();
   const { products, batches, selectedBatchId, setSelectedBatchId } = useProductStore();
@@ -73,14 +72,15 @@ export default function FixesPage() {
   const [filterStatus, setFilterStatus] = useState<IssueStatus | 'all'>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('by_type');
   const [expandedSuggestions, setExpandedSuggestions] = useState<Set<string>>(new Set());
+  const [draggingIssueId, setDraggingIssueId] = useState<string | null>(null);
+  const [dropTargetStatus, setDropTargetStatus] = useState<IssueStatus | null>(null);
 
   useEffect(() => {
     useIssueStore.getState().refreshAssigneeTaskCounts();
-  }, []);
+  }, [issues]);
 
   const handleBatchChange = (batchId: string | 'all') => {
     setSelectedBatchId(batchId);
-    setSelectedBatchFilter(batchId);
   };
 
   const toggleSuggestion = (issueId: string) => {
@@ -207,9 +207,22 @@ export default function FixesPage() {
   const renderKanbanCard = (issue: CheckIssue) => {
     const SeverityIcon = severityIcons[issue.severity];
     const isSuggestionExpanded = expandedSuggestions.has(issue.id);
+    const isDragging = draggingIssueId === issue.id;
 
     return (
-      <Card key={issue.id} className="hover:shadow-card transition-shadow">
+      <Card
+        key={issue.id}
+        draggable={true}
+        onDragStart={(e) => {
+          e.dataTransfer.setData('issueId', issue.id);
+          setDraggingIssueId(issue.id);
+        }}
+        onDragEnd={() => setDraggingIssueId(null)}
+        className={cn(
+          'hover:shadow-card transition-shadow cursor-grab active:cursor-grabbing',
+          isDragging && 'opacity-50'
+        )}
+      >
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-2">
             <p className="text-sm font-medium text-gray-900 line-clamp-1 flex-1 min-w-0">
@@ -286,61 +299,78 @@ export default function FixesPage() {
     );
   };
 
-  const renderKanbanView = () => {
-    const columns: { status: IssueStatus; title: string; color: string; icon: React.ReactNode }[] = [
-      {
-        status: 'pending',
-        title: '待处理',
-        color: 'bg-gray-100 text-gray-700',
-        icon: <Clock className="w-4 h-4" />,
-      },
-      {
-        status: 'processing',
-        title: '处理中',
-        color: 'bg-blue-100 text-blue-700',
-        icon: <Wrench className="w-4 h-4" />,
-      },
-      {
-        status: 'resolved',
-        title: '已完成',
-        color: 'bg-green-100 text-green-700',
-        icon: <CheckCircle2 className="w-4 h-4" />,
-      },
-    ];
+  const renderKanbanColumn = (
+    status: IssueStatus,
+    title: string,
+    icon: React.ReactNode,
+    colorClass: string
+  ) => {
+    const isDropTarget = dropTargetStatus === status;
 
     return (
-      <div className="grid grid-cols-3 gap-4">
-        {columns.map((col) => (
-          <Card key={col.status}>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center', col.color)}>
-                    {col.icon}
-                  </div>
-                  <CardTitle className="text-base">{col.title}</CardTitle>
+      <Card
+        key={status}
+        className={cn(
+          'transition-all',
+          isDropTarget && 'ring-2 ring-primary-500 bg-primary-50/30'
+        )}
+      >
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center', colorClass)}>
+                {icon}
+              </div>
+              <CardTitle className="text-base">{title}</CardTitle>
+            </div>
+            <Badge variant="default" size="sm">
+              {issuesByStatus[status].length}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <div
+            className={cn(
+              'space-y-3 max-h-[600px] overflow-auto pr-1 min-h-[200px] rounded-lg transition-colors',
+              isDropTarget && 'bg-primary-50/50'
+            )}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDropTargetStatus(status);
+            }}
+            onDragLeave={() => setDropTargetStatus(null)}
+            onDrop={(e) => {
+              e.preventDefault();
+              const issueId = e.dataTransfer.getData('issueId');
+              if (issueId) {
+                updateIssueStatus(issueId, status);
+              }
+              setDropTargetStatus(null);
+              setDraggingIssueId(null);
+            }}
+          >
+            {issuesByStatus[status].length > 0 ? (
+              issuesByStatus[status].map((issue) => renderKanbanCard(issue))
+            ) : (
+              <div className="py-8 text-center">
+                <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center mx-auto mb-2">
+                  <ListChecks className="w-6 h-6 text-gray-300" />
                 </div>
-                <Badge variant="default" size="sm">
-                  {issuesByStatus[col.status].length}
-                </Badge>
+                <p className="text-sm text-gray-400">暂无问题</p>
               </div>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <div className="space-y-3 max-h-[600px] overflow-auto pr-1">
-                {issuesByStatus[col.status].length > 0 ? (
-                  issuesByStatus[col.status].map((issue) => renderKanbanCard(issue))
-                ) : (
-                  <div className="py-8 text-center">
-                    <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center mx-auto mb-2">
-                      <ListChecks className="w-6 h-6 text-gray-300" />
-                    </div>
-                    <p className="text-sm text-gray-400">暂无问题</p>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const renderKanbanView = () => {
+    return (
+      <div className="grid grid-cols-3 gap-4">
+        {renderKanbanColumn('pending', '待处理', <Clock className="w-4 h-4" />, 'bg-gray-100 text-gray-700')}
+        {renderKanbanColumn('processing', '处理中', <Wrench className="w-4 h-4" />, 'bg-blue-100 text-blue-700')}
+        {renderKanbanColumn('resolved', '已完成', <CheckCircle2 className="w-4 h-4" />, 'bg-green-100 text-green-700')}
       </div>
     );
   };

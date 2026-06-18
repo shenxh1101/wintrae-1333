@@ -16,6 +16,7 @@ import {
   X,
   ShoppingBag,
   Save,
+  Zap,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
@@ -90,6 +91,7 @@ export default function ExportPage() {
   const [presetName, setPresetName] = useState('');
   const [selectedPresetId, setSelectedPresetId] = useState('');
   const [showPresetDropdown, setShowPresetDropdown] = useState(false);
+  const [quickExportMode, setQuickExportMode] = useState(false);
 
   const issueTypes = [...new Set(issues.map((i) => i.type))];
 
@@ -252,9 +254,10 @@ export default function ExportPage() {
 
   const handleRedownload = (task: ExportTask) => {
     let exportData: Record<string, any>[] = [];
+    let hasSnapshots = !!(task.issueSnapshots && task.issueSnapshots.length > 0);
 
-    if (task.issueSnapshots && task.issueSnapshots.length > 0) {
-      exportData = task.issueSnapshots.map((snap) => ({
+    if (hasSnapshots) {
+      exportData = task.issueSnapshots!.map((snap) => ({
         商品ID: snap.productId,
         商品标题: snap.productTitle,
         问题类型: ISSUE_TYPE_LABELS[snap.issueType as keyof typeof ISSUE_TYPE_LABELS] || snap.issueType,
@@ -265,33 +268,43 @@ export default function ExportPage() {
         负责人: snap.assigneeName || '未分配',
       }));
     } else {
-      exportData = [
-        {
-          任务名称: task.name,
-          导出格式: task.format.toUpperCase(),
-          导出时间: formatDate(task.createdAt),
-          导出人: task.createdBy,
-          问题数量: task.issueCount,
-          商品数量: task.productCount,
-          备注: '快照数据已丢失，以上为任务元数据',
-        },
-      ];
+      const restoredIssues = restoreIssuesFromTask(task);
+      if (restoredIssues.length > 0) {
+        exportData = buildExportData(restoredIssues);
+      } else {
+        exportData = [
+          {
+            任务名称: task.name,
+            导出格式: task.format.toUpperCase(),
+            导出时间: formatDate(task.createdAt),
+            导出人: task.createdBy,
+            问题数量: task.issueCount,
+            商品数量: task.productCount,
+            备注: '快照数据已丢失，以上为任务元数据',
+          },
+        ];
+      }
     }
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, task.issueSnapshots && task.issueSnapshots.length > 0 ? '问题清单' : '导出任务信息');
+    XLSX.utils.book_append_sheet(wb, ws, hasSnapshots ? '问题清单' : (exportData.length > 1 ? '问题清单（还原）' : '导出任务信息'));
 
-    if (task.issueSnapshots && task.issueSnapshots.length > 0) {
+    if (hasSnapshots || exportData.length > 1) {
       ws['!cols'] = [
         { wch: 20 },
         { wch: 40 },
+        { wch: 10 },
+        { wch: 10 },
+        { wch: 8 },
         { wch: 18 },
         { wch: 10 },
+        { wch: 12 },
         { wch: 40 },
         { wch: 40 },
         { wch: 10 },
         { wch: 12 },
+        { wch: 18 },
       ];
     } else {
       ws['!cols'] = [
@@ -313,6 +326,35 @@ export default function ExportPage() {
     setPreviewOpen(true);
   };
 
+  const restoreIssuesFromTask = (task: ExportTask) => {
+    let filtered = issues;
+
+    if (task.platformFilter && task.platformFilter !== 'all') {
+      filtered = filtered.filter((i) => {
+        const product = products.find((p) => p.id === i.productId);
+        return product?.platform === task.platformFilter;
+      });
+    }
+
+    if (task.severityFilter && task.severityFilter.length > 0) {
+      filtered = filtered.filter((i) => task.severityFilter!.includes(i.severity));
+    }
+
+    if (task.typeFilter && task.typeFilter.length > 0) {
+      filtered = filtered.filter((i) => task.typeFilter!.includes(i.type));
+    }
+
+    if (task.assigneeFilter && task.assigneeFilter !== 'all') {
+      if (task.assigneeFilter === 'unassigned') {
+        filtered = filtered.filter((i) => !i.assignee);
+      } else {
+        filtered = filtered.filter((i) => i.assignee === task.assigneeFilter);
+      }
+    }
+
+    return filtered;
+  };
+
   const handleSavePreset = () => {
     if (!presetName.trim()) return;
 
@@ -324,9 +366,12 @@ export default function ExportPage() {
       assigneeFilter: (selectedScope === 'by_assignee' || selectedScope === 'custom') && selectedAssignee !== 'all' ? selectedAssignee : undefined,
       platformFilter: selectedScope === 'custom' && selectedPlatform !== 'all' ? selectedPlatform : undefined,
       statusFilter: selectedScope === 'custom' && selectedIssueStatus !== 'all' ? selectedIssueStatus : undefined,
+      batchFilter: selectedBatchId,
+      isQuick: quickExportMode,
     });
 
     setPresetName('');
+    setQuickExportMode(false);
     setShowSavePresetModal(false);
   };
 
@@ -344,6 +389,13 @@ export default function ExportPage() {
       setSelectedAssignee(preset.assigneeFilter || 'all');
       setSelectedPlatform(preset.platformFilter || 'all');
       setSelectedIssueStatus(preset.statusFilter || 'all');
+      setSelectedBatchId(preset.batchFilter || 'all');
+
+      if (preset.isQuick) {
+        setTimeout(() => {
+          handleExport();
+        }, 0);
+      }
     }
   };
 
@@ -420,13 +472,14 @@ export default function ExportPage() {
                                 )}
                               >
                                 <span
-                                  className="flex-1 truncate text-gray-700"
+                                  className="flex-1 truncate text-gray-700 flex items-center gap-1.5"
                                   onClick={() => {
                                     handleSelectPreset(preset.id);
                                     setShowPresetDropdown(false);
                                   }}
                                 >
-                                  {preset.name}
+                                  {preset.isQuick && <Zap className="w-3.5 h-3.5 text-warning-500 flex-shrink-0" />}
+                                  <span className="truncate">{preset.name}</span>
                                 </span>
                                 <button
                                   onClick={(e) => {
@@ -1093,7 +1146,7 @@ export default function ExportPage() {
               </div>
             </div>
 
-            {previewTask.issueSnapshots && previewTask.issueSnapshots.length > 0 && (
+            {previewTask.issueSnapshots && previewTask.issueSnapshots.length > 0 ? (
               <div>
                 <p className="text-sm font-medium text-gray-700 mb-2">问题清单预览（前10条）</p>
                 <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -1129,6 +1182,64 @@ export default function ExportPage() {
                   </div>
                 </div>
               </div>
+            ) : (
+              <div>
+                <div className="mb-3 p-3 bg-warning-50 border border-warning-200 rounded-lg flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-warning-600 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-warning-700">
+                    原始快照不存在，以下为根据筛选条件还原的近似数据
+                  </p>
+                </div>
+                {(() => {
+                  const restored = restoreIssuesFromTask(previewTask);
+                  if (restored.length === 0) {
+                    return (
+                      <div className="p-6 bg-gray-50 rounded-lg text-center">
+                        <p className="text-sm text-gray-500">暂无法还原数据（当前数据可能已变化）</p>
+                      </div>
+                    );
+                  }
+                  return (
+                    <>
+                      <p className="text-sm font-medium text-gray-700 mb-2">
+                        还原数据预览（前10条，共 {restored.length} 条）
+                      </p>
+                      <div className="border border-gray-200 rounded-lg overflow-hidden">
+                        <div className="max-h-64 overflow-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50 sticky top-0">
+                              <tr>
+                                <th className="px-3 py-2 text-left font-medium text-gray-600">商品标题</th>
+                                <th className="px-3 py-2 text-left font-medium text-gray-600">问题类型</th>
+                                <th className="px-3 py-2 text-left font-medium text-gray-600">严重程度</th>
+                                <th className="px-3 py-2 text-left font-medium text-gray-600">状态</th>
+                                <th className="px-3 py-2 text-left font-medium text-gray-600">负责人</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {restored.slice(0, 10).map((issue, idx) => (
+                                <tr key={idx}>
+                                  <td className="px-3 py-2 text-gray-900 line-clamp-1 max-w-xs">{issue.productTitle}</td>
+                                  <td className="px-3 py-2 text-gray-700">
+                                    {ISSUE_TYPE_LABELS[issue.type as keyof typeof ISSUE_TYPE_LABELS] || issue.type}
+                                  </td>
+                                  <td className="px-3 py-2 text-gray-700">
+                                    {SEVERITY_LABELS[issue.severity as keyof typeof SEVERITY_LABELS] || issue.severity}
+                                  </td>
+                                  <td className="px-3 py-2 text-gray-700">
+                                    {STATUS_LABELS[issue.status as keyof typeof STATUS_LABELS] || issue.status}
+                                  </td>
+                                  <td className="px-3 py-2 text-gray-700">{issue.assigneeName || '未分配'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
             )}
           </div>
         )}
@@ -1136,12 +1247,18 @@ export default function ExportPage() {
 
       <Modal
         isOpen={showSavePresetModal}
-        onClose={() => setShowSavePresetModal(false)}
+        onClose={() => {
+          setShowSavePresetModal(false);
+          setQuickExportMode(false);
+        }}
         title="保存筛选方案"
         size="sm"
         footer={
           <div className="flex justify-end gap-3">
-            <Button variant="outline" onClick={() => setShowSavePresetModal(false)}>
+            <Button variant="outline" onClick={() => {
+              setShowSavePresetModal(false);
+              setQuickExportMode(false);
+            }}>
               取消
             </Button>
             <Button variant="primary" onClick={handleSavePreset} disabled={!presetName.trim()}>
@@ -1164,9 +1281,80 @@ export default function ExportPage() {
               autoFocus
             />
           </div>
-          <p className="text-xs text-gray-500">
-            将保存当前所有筛选条件（导出范围、严重程度、问题类型、负责人、平台、状态）
-          </p>
+
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={quickExportMode}
+                onChange={(e) => setQuickExportMode(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span className="text-sm text-gray-700">设为快捷任务，点击即导出</span>
+            </label>
+          </div>
+
+          <div className="p-3 bg-gray-50 rounded-lg">
+            <p className="text-xs font-medium text-gray-700 mb-2">将保存的条件</p>
+            <div className="space-y-1.5 text-xs text-gray-600">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">批次</span>
+                <span className="font-medium">
+                  {selectedBatchId === 'all' ? '全部商品' : (batches.find((b) => b.id === selectedBatchId)?.name || selectedBatchId)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-500">范围</span>
+                <span className="font-medium">
+                  {scopeOptions.find((s) => s.value === selectedScope)?.label || selectedScope}
+                </span>
+              </div>
+              {(selectedScope === 'custom' || selectedScope === 'by_severity') && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">严重程度</span>
+                  <span className="font-medium">
+                    {selectedSeverity.length > 0
+                      ? selectedSeverity.map((s) => severityOptions.find((o) => o.value === s)?.label || s).join('、')
+                      : '未筛选'}
+                  </span>
+                </div>
+              )}
+              {(selectedScope === 'custom' || selectedScope === 'by_type') && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">问题类型</span>
+                  <span className="font-medium">
+                    {selectedTypes.length > 0
+                      ? selectedTypes.map((t) => ISSUE_TYPE_LABELS[t as keyof typeof ISSUE_TYPE_LABELS] || t).join('、')
+                      : '未筛选'}
+                  </span>
+                </div>
+              )}
+              {(selectedScope === 'custom' || selectedScope === 'by_assignee') && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-500">负责人</span>
+                  <span className="font-medium">
+                    {selectedAssignee === 'all' ? '全部负责人' : selectedAssignee === 'unassigned' ? '未分配' : (assignees.find((a) => a.id === selectedAssignee)?.name || selectedAssignee)}
+                  </span>
+                </div>
+              )}
+              {selectedScope === 'custom' && (
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">平台</span>
+                    <span className="font-medium">
+                      {PLATFORM_OPTIONS.find((p) => p.value === selectedPlatform)?.label || selectedPlatform}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-500">状态</span>
+                    <span className="font-medium">
+                      {STATUS_OPTIONS.find((s) => s.value === selectedIssueStatus)?.label || selectedIssueStatus}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </Modal>
     </div>

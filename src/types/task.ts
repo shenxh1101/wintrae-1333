@@ -48,5 +48,7 @@ export interface FilterPreset {
   assigneeFilter?: string;
   platformFilter?: string;
   statusFilter?: string;
+  batchFilter?: string;
+  isQuick?: boolean;
   createdAt: string;
 }
