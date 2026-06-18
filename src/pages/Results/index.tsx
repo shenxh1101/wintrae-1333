@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ListChecks,
   Search,
@@ -19,9 +19,11 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
+import Modal from '@/components/ui/Modal';
 import { useIssueStore } from '@/store/issueStore';
 import { useProductStore } from '@/store/productStore';
 import { useRuleStore } from '@/store/ruleStore';
+import { useTaskStore } from '@/store/taskStore';
 import { runCheck } from '@/services/checkEngine';
 import {
   ISSUE_TYPE_LABELS,
@@ -29,6 +31,7 @@ import {
   STATUS_LABELS,
   type IssueSeverity,
   type CheckIssue,
+  type IssueStatus,
 } from '@/types/issue';
 import { cn } from '@/lib/utils';
 import { formatDate } from '@/utils/format';
@@ -60,12 +63,34 @@ export default function ResultsPage() {
     setIssues,
     setHasChecked,
     getFilteredIssues,
+    updateIssueStatus,
+    assignIssue,
+    getIssuesByProduct,
+    bulkUpdateStatus,
   } = useIssueStore();
-  const { products } = useProductStore();
+  const { products, lastImportedAt } = useProductStore();
   const { rules } = useRuleStore();
+  const { assignees } = useTaskStore();
   const [isChecking, setIsChecking] = useState(false);
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
+  const [assigningIssueId, setAssigningIssueId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!hasChecked && products.length > 0) {
+      handleRunCheck();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (hasChecked && lastImportedAt) {
+      const issuesLatest = issues.length > 0 ? issues[0]?.createdAt : null;
+      if (!issuesLatest || new Date(lastImportedAt) > new Date(issuesLatest)) {
+      }
+    }
+  }, [lastImportedAt]);
 
   const filteredIssues = getFilteredIssues();
 
@@ -86,6 +111,35 @@ export default function ResultsPage() {
       setHasChecked(true);
       setIsChecking(false);
     }, 800);
+  };
+
+  const handleMarkResolved = (issueId: string) => {
+    updateIssueStatus(issueId, 'resolved');
+  };
+
+  const handleOpenAssignModal = (issueId: string) => {
+    setAssigningIssueId(issueId);
+    setSelectedAssigneeId('');
+    setShowAssignModal(true);
+  };
+
+  const handleConfirmAssign = () => {
+    if (!assigningIssueId || !selectedAssigneeId) return;
+    const assignee = assignees.find((a) => a.id === selectedAssigneeId);
+    if (assignee) {
+      assignIssue(assigningIssueId, assignee.id, assignee.name);
+    }
+    setShowAssignModal(false);
+    setAssigningIssueId(null);
+    setSelectedAssigneeId('');
+  };
+
+  const handleResolveAllForProduct = (productId: string) => {
+    const productIssues = getIssuesByProduct(productId);
+    const issueIds = productIssues.map((i) => i.id);
+    if (issueIds.length > 0) {
+      bulkUpdateStatus(issueIds, 'resolved');
+    }
   };
 
   const selectedIssue = issues.find((i) => i.id === selectedIssueId);
@@ -499,11 +553,25 @@ export default function ResultsPage() {
                   </div>
 
                   <div className="pt-3 border-t border-gray-100 space-y-2">
-                    <Button variant="primary" size="sm" fullWidth>
-                      标记为已处理
-                    </Button>
-                    <Button variant="outline" size="sm" fullWidth>
-                      分配负责人
+                    {selectedIssue.status !== 'resolved' && (
+                      <Button
+                        variant="success"
+                        size="sm"
+                        fullWidth
+                        onClick={() => handleMarkResolved(selectedIssue.id)}
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        标记为已处理
+                      </Button>
+                    )}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      fullWidth
+                      onClick={() => handleOpenAssignModal(selectedIssue.id)}
+                    >
+                      <User className="w-4 h-4" />
+                      {selectedIssue.assigneeName ? '重新分配负责人' : '分配负责人'}
                     </Button>
                   </div>
                 </CardContent>
@@ -583,7 +651,12 @@ export default function ResultsPage() {
                   </div>
 
                   <div className="pt-3 border-t border-gray-100">
-                    <Button variant="primary" size="sm" fullWidth>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      fullWidth
+                      onClick={() => selectedProductId && handleResolveAllForProduct(selectedProductId)}
+                    >
                       <CheckCircle2 className="w-4 h-4" />
                       一键全部处理
                     </Button>
@@ -604,6 +677,75 @@ export default function ResultsPage() {
           </Card>
         </div>
       </div>
+
+      <Modal
+        isOpen={showAssignModal}
+        onClose={() => setShowAssignModal(false)}
+        title="分配负责人"
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => setShowAssignModal(false)}>
+              取消
+            </Button>
+            <Button variant="primary" onClick={handleConfirmAssign} disabled={!selectedAssigneeId}>
+              确认分配
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">选择负责处理此问题的人员</p>
+          <div className="space-y-2">
+            {assignees.map((assignee) => (
+              <button
+                key={assignee.id}
+                onClick={() => setSelectedAssigneeId(assignee.id)}
+                className={cn(
+                  'w-full p-3 rounded-xl border flex items-center gap-3 text-left transition-all',
+                  selectedAssigneeId === assignee.id
+                    ? 'border-primary-500 bg-primary-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                )}
+              >
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center text-white font-medium">
+                  {assignee.name.charAt(0)}
+                </div>
+                <div className="flex-1">
+                  <p className="font-medium text-gray-900">{assignee.name}</p>
+                  <p className="text-sm text-gray-500">
+                    {assignee.role} · 当前 {assignee.taskCount} 个待处理任务
+                  </p>
+                </div>
+                <div
+                  className={cn(
+                    'w-5 h-5 rounded-full border-2 flex items-center justify-center',
+                    selectedAssigneeId === assignee.id
+                      ? 'border-primary-500 bg-primary-500'
+                      : 'border-gray-300'
+                  )}
+                >
+                  {selectedAssigneeId === assignee.id && (
+                    <svg
+                      className="w-3 h-3 text-white"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={3}
+                        d="M5 13l4 4L19 7"
+                      />
+                    </svg>
+                  )}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

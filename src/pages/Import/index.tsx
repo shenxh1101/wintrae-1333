@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   Upload,
   FileSpreadsheet,
@@ -15,9 +15,13 @@ import Papa from 'papaparse';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
+import Modal from '@/components/ui/Modal';
 import { useProductStore } from '@/store/productStore';
+import { useIssueStore } from '@/store/issueStore';
+import { useRuleStore } from '@/store/ruleStore';
 import { useNavigate } from 'react-router-dom';
 import type { Product, ProductImage, ProductSpec, LogisticsInfo } from '@/types/product';
+import { runCheck } from '@/services/checkEngine';
 import { generateId } from '@/utils/format';
 import { cn } from '@/lib/utils';
 
@@ -32,12 +36,20 @@ interface ImportStats {
 
 export default function ImportPage() {
   const navigate = useNavigate();
-  const { products, importProducts, setProducts, clearProducts } = useProductStore();
+  const { products, importProducts, setProducts, clearProducts, lastImportedAt } = useProductStore();
+  const { setIssues, setHasChecked, issues } = useIssueStore();
+  const { rules } = useRuleStore();
   const [status, setStatus] = useState<ImportStatus>('idle');
   const [previewData, setPreviewData] = useState<Product[]>([]);
   const [stats, setStats] = useState<ImportStats>({ total: 0, success: 0, failed: 0, skipped: 0 });
   const [selectedPlatform, setSelectedPlatform] = useState('taobao');
+  const [showCheckPrompt, setShowCheckPrompt] = useState(false);
+  const [isChecking, setIsChecking] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    useIssueStore.getState().refreshAssigneeTaskCounts();
+  }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -189,7 +201,26 @@ export default function ImportPage() {
     setTimeout(() => {
       importProducts(previewData);
       setStatus('success');
+      setShowCheckPrompt(true);
     }, 800);
+  };
+
+  const handleRunCheckNow = () => {
+    setIsChecking(true);
+    setShowCheckPrompt(false);
+    setTimeout(() => {
+      const currentProducts = useProductStore.getState().products;
+      const currentRules = useRuleStore.getState().rules;
+      const result = runCheck(currentProducts, currentRules);
+      setIssues(result.issues);
+      setHasChecked(true);
+      setIsChecking(false);
+      navigate('/results');
+    }, 800);
+  };
+
+  const handleSkipCheck = () => {
+    setShowCheckPrompt(false);
   };
 
   const handleReset = () => {
@@ -536,6 +567,45 @@ export default function ImportPage() {
           </Card>
         </div>
       </div>
+
+      <Modal
+        isOpen={showCheckPrompt}
+        onClose={handleSkipCheck}
+        title="立即检查新导入商品？"
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={handleSkipCheck}>
+              稍后检查
+            </Button>
+            <Button variant="primary" onClick={handleRunCheckNow} loading={isChecking}>
+              <Play className="w-4 h-4" />
+              立即检查
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-primary-100 flex items-center justify-center flex-shrink-0">
+              <Play className="w-5 h-5 text-primary-600" />
+            </div>
+            <div>
+              <p className="font-medium text-gray-900 mb-1">发现 {stats.success} 条新导入的商品</p>
+              <p className="text-sm text-gray-500">
+                是否立即对所有商品执行规则检查？检查完成后可在结果页面查看问题详情。
+              </p>
+            </div>
+          </div>
+          {issues.length > 0 && (
+            <div className="p-3 bg-amber-50 rounded-lg border border-amber-100">
+              <p className="text-sm text-amber-700">
+                提示：执行检查会覆盖现有的 {issues.length} 条检查结果
+              </p>
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

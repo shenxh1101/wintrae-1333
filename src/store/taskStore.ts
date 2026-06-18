@@ -1,19 +1,19 @@
 import { create } from 'zustand';
-import type { ExportTask, Assignee } from '../types/task';
+import type { ExportTask, Assignee, ExportScope, ExportFormat } from '../types/task';
 import { mockExportTasks, mockAssignees } from '../data/mockTasks';
 import { getStorage, setStorage } from '../utils/storage';
 
 interface TaskState {
   tasks: ExportTask[];
   assignees: Assignee[];
-  selectedFormat: 'xlsx' | 'csv';
-  selectedScope: 'all' | 'selected' | 'by_severity' | 'by_type' | 'by_assignee';
+  selectedFormat: ExportFormat;
+  selectedScope: ExportScope;
   setTasks: (tasks: ExportTask[]) => void;
   addTask: (task: ExportTask) => void;
   updateTask: (id: string, updates: Partial<ExportTask>) => void;
   deleteTask: (id: string) => void;
-  setSelectedFormat: (format: 'xlsx' | 'csv') => void;
-  setSelectedScope: (scope: 'all' | 'selected' | 'by_severity' | 'by_type' | 'by_assignee') => void;
+  setSelectedFormat: (format: ExportFormat) => void;
+  setSelectedScope: (scope: ExportScope) => void;
   addAssignee: (assignee: Assignee) => void;
   updateAssignee: (id: string, updates: Partial<Assignee>) => void;
   deleteAssignee: (id: string) => void;

@@ -1,5 +1,5 @@
 export type ExportFormat = 'xlsx' | 'csv';
-export type ExportScope = 'all' | 'selected' | 'by_severity' | 'by_type' | 'by_assignee';
+export type ExportScope = 'all' | 'selected' | 'by_severity' | 'by_type' | 'by_assignee' | 'custom';
 export type ExportTaskStatus = 'pending' | 'generating' | 'completed' | 'failed';
 
 export interface ExportTask {
@@ -10,12 +10,25 @@ export interface ExportTask {
   severityFilter?: string[];
   typeFilter?: string[];
   assigneeFilter?: string;
+  platformFilter?: string;
   issueCount: number;
   productCount: number;
   status: ExportTaskStatus;
   downloadUrl?: string;
   createdAt: string;
   createdBy: string;
+  issueSnapshots?: ExportIssueSnapshot[];
+}
+
+export interface ExportIssueSnapshot {
+  productId: string;
+  productTitle: string;
+  issueType: string;
+  severity: string;
+  description: string;
+  suggestion: string;
+  status: string;
+  assigneeName?: string;
 }
 
 export interface Assignee {

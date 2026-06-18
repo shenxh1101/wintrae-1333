@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Download,
   FileSpreadsheet,
@@ -13,16 +13,23 @@ import {
   Calendar,
   AlertTriangle,
   Info,
+  X,
+  ShoppingBag,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
 import Badge from '@/components/ui/Badge';
+import Modal from '@/components/ui/Modal';
 import { useIssueStore } from '@/store/issueStore';
 import { useProductStore } from '@/store/productStore';
 import { useTaskStore } from '@/store/taskStore';
-import { ISSUE_TYPE_LABELS, SEVERITY_LABELS } from '@/types/issue';
-import type { ExportTask, ExportFormat, ExportScope } from '@/types/task';
+import {
+  ISSUE_TYPE_LABELS,
+  SEVERITY_LABELS,
+  STATUS_LABELS,
+} from '@/types/issue';
+import type { ExportTask, ExportFormat, ExportScope, ExportIssueSnapshot } from '@/types/task';
 import { cn } from '@/lib/utils';
 import { generateId, formatDate } from '@/utils/format';
 
@@ -38,76 +45,127 @@ const statusIcons = {
   failed: AlertCircle,
 };
 
-const statusColors: Record<string, string> = {
-  pending: 'bg-gray-100 text-gray-600',
-  generating: 'bg-blue-100 text-blue-600',
-  completed: 'bg-success-100 text-success-700',
-  failed: 'bg-danger-100 text-danger-700',
-};
+const PLATFORM_OPTIONS = [
+  { value: 'all', label: '全部平台' },
+  { value: 'taobao', label: '淘宝' },
+  { value: 'jd', label: '京东' },
+  { value: 'pdd', label: '拼多多' },
+  { value: 'douyin', label: '抖音' },
+];
+
+const STATUS_OPTIONS = [
+  { value: 'all', label: '全部状态' },
+  { value: 'pending', label: '待处理' },
+  { value: 'processing', label: '处理中' },
+  { value: 'resolved', label: '已完成' },
+];
 
 export default function ExportPage() {
-  const { issues, getFilteredIssues } = useIssueStore();
+  const { issues } = useIssueStore();
   const { products } = useProductStore();
-  const { tasks, addTask, selectedFormat, setSelectedFormat, selectedScope, setSelectedScope } =
+  const { tasks, addTask, assignees, selectedFormat, setSelectedFormat, selectedScope, setSelectedScope } =
     useTaskStore();
   const [taskName, setTaskName] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedSeverity, setSelectedSeverity] = useState<string[]>([]);
   const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
-  const [selectedAssignee, setSelectedAssignee] = useState('');
+  const [selectedAssignee, setSelectedAssignee] = useState('all');
+  const [selectedPlatform, setSelectedPlatform] = useState('all');
+  const [selectedIssueStatus, setSelectedIssueStatus] = useState('all');
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTask, setPreviewTask] = useState<ExportTask | null>(null);
 
   const issueTypes = [...new Set(issues.map((i) => i.type))];
-  const assignees = [...new Set(issues.filter((i) => i.assigneeName).map((i) => i.assigneeName!))];
 
-  const getExportCount = () => {
+  const getFilteredIssues = () => {
     let filtered = issues;
 
-    if (selectedScope === 'by_severity' && selectedSeverity.length > 0) {
-      filtered = filtered.filter((i) => selectedSeverity.includes(i.severity));
-    }
-    if (selectedScope === 'by_type' && selectedTypes.length > 0) {
-      filtered = filtered.filter((i) => selectedTypes.includes(i.type));
-    }
-    if (selectedScope === 'by_assignee' && selectedAssignee) {
-      filtered = filtered.filter((i) => i.assigneeName === selectedAssignee);
-    }
-
-    const productCount = new Set(filtered.map((i) => i.productId)).size;
-    return { issueCount: filtered.length, productCount };
-  };
-
-  const { issueCount, productCount } = getExportCount();
-
-  const handleExport = () => {
-    if (issueCount === 0) return;
-
-    setIsGenerating(true);
-
-    setTimeout(() => {
-      let filtered = issues;
-
-      if (selectedScope === 'by_severity' && selectedSeverity.length > 0) {
+    if (selectedScope === 'by_severity' || selectedScope === 'custom') {
+      if (selectedSeverity.length > 0) {
         filtered = filtered.filter((i) => selectedSeverity.includes(i.severity));
       }
-      if (selectedScope === 'by_type' && selectedTypes.length > 0) {
+    }
+    if (selectedScope === 'by_type' || selectedScope === 'custom') {
+      if (selectedTypes.length > 0) {
         filtered = filtered.filter((i) => selectedTypes.includes(i.type));
       }
-      if (selectedScope === 'by_assignee' && selectedAssignee) {
-        filtered = filtered.filter((i) => i.assigneeName === selectedAssignee);
+    }
+    if (selectedScope === 'by_assignee' || selectedScope === 'custom') {
+      if (selectedAssignee !== 'all') {
+        if (selectedAssignee === 'unassigned') {
+          filtered = filtered.filter((i) => !i.assignee);
+        } else {
+          filtered = filtered.filter((i) => i.assignee === selectedAssignee);
+        }
       }
+    }
+    if (selectedScope === 'custom') {
+      if (selectedPlatform !== 'all') {
+        filtered = filtered.filter((i) => {
+          const product = products.find((p) => p.id === i.productId);
+          return product?.platform === selectedPlatform;
+        });
+      }
+      if (selectedIssueStatus !== 'all') {
+        filtered = filtered.filter((i) => i.status === selectedIssueStatus);
+      }
+    }
 
-      const exportData = filtered.map((issue) => ({
+    return filtered;
+  };
+
+  const filteredIssues = useMemo(() => getFilteredIssues(), [
+    issues, selectedScope, selectedSeverity, selectedTypes,
+    selectedAssignee, selectedPlatform, selectedIssueStatus, products
+  ]);
+
+  const exportCount = useMemo(() => {
+    const productCount = new Set(filteredIssues.map((i) => i.productId)).size;
+    return { issueCount: filteredIssues.length, productCount };
+  }, [filteredIssues]);
+
+  const buildExportData = (issuesToExport: typeof filteredIssues) => {
+    return issuesToExport.map((issue) => {
+      const product = products.find((p) => p.id === issue.productId);
+      return {
         商品ID: issue.productId,
         商品标题: issue.productTitle,
+        平台: product?.platform?.toUpperCase() || '-',
+        价格: product ? `¥${product.price.toFixed(2)}` : '-',
+        库存: product?.stock ?? '-',
         问题类型: ISSUE_TYPE_LABELS[issue.type as keyof typeof ISSUE_TYPE_LABELS] || issue.type,
         严重程度: SEVERITY_LABELS[issue.severity as keyof typeof SEVERITY_LABELS] || issue.severity,
         问题字段: issue.field,
         问题描述: issue.description,
         修改建议: issue.suggestion,
-        状态: issue.status === 'pending' ? '待处理' : issue.status === 'processing' ? '处理中' : '已完成',
+        处理状态: STATUS_LABELS[issue.status as keyof typeof STATUS_LABELS] || issue.status,
         负责人: issue.assigneeName || '未分配',
         发现时间: formatDate(issue.createdAt),
-      }));
+      };
+    });
+  };
+
+  const buildSnapshots = (issuesToExport: typeof filteredIssues): ExportIssueSnapshot[] => {
+    return issuesToExport.map((issue) => ({
+      productId: issue.productId,
+      productTitle: issue.productTitle,
+      issueType: issue.type,
+      severity: issue.severity,
+      description: issue.description,
+      suggestion: issue.suggestion,
+      status: issue.status,
+      assigneeName: issue.assigneeName,
+    }));
+  };
+
+  const handleExport = () => {
+    if (exportCount.issueCount === 0) return;
+
+    setIsGenerating(true);
+
+    setTimeout(() => {
+      const exportData = buildExportData(filteredIssues);
+      const snapshots = buildSnapshots(filteredIssues);
 
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
@@ -116,6 +174,9 @@ export default function ExportPage() {
       ws['!cols'] = [
         { wch: 20 },
         { wch: 40 },
+        { wch: 10 },
+        { wch: 10 },
+        { wch: 8 },
         { wch: 18 },
         { wch: 10 },
         { wch: 12 },
@@ -134,11 +195,16 @@ export default function ExportPage() {
         name: fileName,
         format: selectedFormat as ExportFormat,
         scope: selectedScope as ExportScope,
-        issueCount: filtered.length,
-        productCount: new Set(filtered.map((i) => i.productId)).size,
+        severityFilter: selectedScope === 'by_severity' || selectedScope === 'custom' ? selectedSeverity : undefined,
+        typeFilter: selectedScope === 'by_type' || selectedScope === 'custom' ? selectedTypes : undefined,
+        assigneeFilter: (selectedScope === 'by_assignee' || selectedScope === 'custom') && selectedAssignee !== 'all' ? selectedAssignee : undefined,
+        platformFilter: selectedScope === 'custom' && selectedPlatform !== 'all' ? selectedPlatform : undefined,
+        issueCount: filteredIssues.length,
+        productCount: new Set(filteredIssues.map((i) => i.productId)).size,
         status: 'completed',
         createdAt: new Date().toISOString(),
         createdBy: '当前用户',
+        issueSnapshots: snapshots,
       };
       addTask(newTask);
 
@@ -146,8 +212,37 @@ export default function ExportPage() {
     }, 1000);
   };
 
+  const handleRedownload = (task: ExportTask) => {
+    if (!task.issueSnapshots || task.issueSnapshots.length === 0) {
+      alert('该导出任务的快照数据已丢失，无法重新下载');
+      return;
+    }
+
+    const exportData = task.issueSnapshots.map((snap) => ({
+      商品ID: snap.productId,
+      商品标题: snap.productTitle,
+      问题类型: ISSUE_TYPE_LABELS[snap.issueType as keyof typeof ISSUE_TYPE_LABELS] || snap.issueType,
+      严重程度: SEVERITY_LABELS[snap.severity as keyof typeof SEVERITY_LABELS] || snap.severity,
+      问题描述: snap.description,
+      修改建议: snap.suggestion,
+      处理状态: STATUS_LABELS[snap.status as keyof typeof STATUS_LABELS] || snap.status,
+      负责人: snap.assigneeName || '未分配',
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '问题清单');
+    XLSX.writeFile(wb, `${task.name}.${task.format}`);
+  };
+
+  const handlePreviewTask = (task: ExportTask) => {
+    setPreviewTask(task);
+    setPreviewOpen(true);
+  };
+
   const scopeOptions = [
     { value: 'all', label: '全部问题', desc: '导出所有检查出的问题' },
+    { value: 'custom', label: '自定义组合筛选', desc: '按平台、严重程度、负责人、状态组合筛选' },
     { value: 'by_severity', label: '按严重程度', desc: '只导出指定严重程度的问题' },
     { value: 'by_type', label: '按问题类型', desc: '只导出指定类型的问题' },
     { value: 'by_assignee', label: '按负责人', desc: '按负责人分组导出' },
@@ -165,7 +260,7 @@ export default function ExportPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">导出任务</h1>
           <p className="text-sm text-gray-500 mt-1">
-            导出问题清单，分配给负责人处理
+            按平台、负责人、严重程度组合筛选，导出问题清单分配处理
           </p>
         </div>
       </div>
@@ -288,6 +383,95 @@ export default function ExportPage() {
                 </div>
               </div>
 
+              {selectedScope === 'custom' && (
+                <div className="space-y-4 p-4 bg-gray-50 rounded-xl">
+                  <p className="text-sm font-medium text-gray-700">组合筛选条件</p>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1.5">所属平台</label>
+                      <select
+                        value={selectedPlatform}
+                        onChange={(e) => setSelectedPlatform(e.target.value)}
+                        className="w-full h-9 px-3 rounded-lg border border-gray-300 text-sm bg-white focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
+                      >
+                        {PLATFORM_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1.5">处理状态</label>
+                      <select
+                        value={selectedIssueStatus}
+                        onChange={(e) => setSelectedIssueStatus(e.target.value)}
+                        className="w-full h-9 px-3 rounded-lg border border-gray-300 text-sm bg-white focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
+                      >
+                        {STATUS_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1.5">严重程度</label>
+                    <div className="flex flex-wrap gap-2">
+                      {severityOptions.map((option) => {
+                        const isSelected = selectedSeverity.includes(option.value);
+                        return (
+                          <button
+                            key={option.value}
+                            onClick={() => {
+                              if (isSelected) {
+                                setSelectedSeverity(
+                                  selectedSeverity.filter((s) => s !== option.value)
+                                );
+                              } else {
+                                setSelectedSeverity([...selectedSeverity, option.value]);
+                              }
+                            }}
+                            className={cn(
+                              'px-3 py-1.5 rounded-lg text-sm font-medium transition-all',
+                              isSelected
+                                ? option.color === 'danger'
+                                  ? 'bg-danger-100 text-danger-700 ring-2 ring-danger-500/30'
+                                  : option.color === 'warning'
+                                  ? 'bg-warning-100 text-warning-700 ring-2 ring-warning-500/30'
+                                  : 'bg-blue-100 text-blue-700 ring-2 ring-blue-500/30'
+                                : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
+                            )}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1.5">负责人</label>
+                    <select
+                      value={selectedAssignee}
+                      onChange={(e) => setSelectedAssignee(e.target.value)}
+                      className="w-full h-9 px-3 rounded-lg border border-gray-300 text-sm bg-white focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
+                    >
+                      <option value="all">全部负责人</option>
+                      <option value="unassigned">未分配</option>
+                      {assignees.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name} ({a.role}) - {a.taskCount}待办
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
               {selectedScope === 'by_severity' && (
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm font-medium text-gray-700 mb-3">选择严重程度</p>
@@ -329,29 +513,33 @@ export default function ExportPage() {
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm font-medium text-gray-700 mb-3">选择问题类型</p>
                   <div className="flex flex-wrap gap-2">
-                    {issueTypes.map((type) => {
-                      const isSelected = selectedTypes.includes(type);
-                      return (
-                        <button
-                          key={type}
-                          onClick={() => {
-                            if (isSelected) {
-                              setSelectedTypes(selectedTypes.filter((t) => t !== type));
-                            } else {
-                              setSelectedTypes([...selectedTypes, type]);
-                            }
-                          }}
-                          className={cn(
-                            'px-3 py-1.5 rounded-lg text-sm transition-all',
-                            isSelected
-                              ? 'bg-primary-100 text-primary-700 font-medium'
-                              : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
-                          )}
-                        >
-                          {ISSUE_TYPE_LABELS[type as keyof typeof ISSUE_TYPE_LABELS] || type}
-                        </button>
-                      );
-                    })}
+                    {issueTypes.length === 0 ? (
+                      <p className="text-sm text-gray-400">暂无数据</p>
+                    ) : (
+                      issueTypes.map((type) => {
+                        const isSelected = selectedTypes.includes(type);
+                        return (
+                          <button
+                            key={type}
+                            onClick={() => {
+                              if (isSelected) {
+                                setSelectedTypes(selectedTypes.filter((t) => t !== type));
+                              } else {
+                                setSelectedTypes([...selectedTypes, type]);
+                              }
+                            }}
+                            className={cn(
+                              'px-3 py-1.5 rounded-lg text-sm transition-all',
+                              isSelected
+                                ? 'bg-primary-100 text-primary-700 font-medium'
+                                : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
+                            )}
+                          >
+                            {ISSUE_TYPE_LABELS[type as keyof typeof ISSUE_TYPE_LABELS] || type}
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               )}
@@ -364,10 +552,11 @@ export default function ExportPage() {
                     onChange={(e) => setSelectedAssignee(e.target.value)}
                     className="w-full h-10 px-4 rounded-lg border border-gray-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none bg-white"
                   >
-                    <option value="">请选择负责人</option>
-                    {assignees.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
+                    <option value="all">全部负责人</option>
+                    <option value="unassigned">未分配</option>
+                    {assignees.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name} ({a.role})
                       </option>
                     ))}
                   </select>
@@ -380,21 +569,26 @@ export default function ExportPage() {
                     <p className="text-sm text-gray-600">预计导出</p>
                     <div className="flex items-center gap-4 mt-1">
                       <span className="text-2xl font-bold text-primary-700">
-                        {issueCount}
+                        {exportCount.issueCount}
                       </span>
                       <span className="text-sm text-gray-500">个问题</span>
                       <span className="text-2xl font-bold text-primary-700">
-                        {productCount}
+                        {exportCount.productCount}
                       </span>
                       <span className="text-sm text-gray-500">个商品</span>
                     </div>
+                    {filteredIssues.length > 0 && (
+                      <div className="flex items-center gap-4 mt-2 text-xs text-gray-500">
+                        <span>包含字段：平台、价格、库存、问题类型、严重程度、描述、建议、状态、负责人</span>
+                      </div>
+                    )}
                   </div>
                   <Button
                     variant="primary"
                     size="lg"
                     onClick={handleExport}
                     loading={isGenerating}
-                    disabled={issueCount === 0}
+                    disabled={exportCount.issueCount === 0}
                   >
                     <Download className="w-5 h-5" />
                     生成导出文件
@@ -409,12 +603,8 @@ export default function ExportPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle>导出历史</CardTitle>
-                  <CardDescription>查看历史导出记录</CardDescription>
+                  <CardDescription>查看历史导出记录，可重新下载</CardDescription>
                 </div>
-                <Button variant="outline" size="sm">
-                  <RefreshCw className="w-4 h-4" />
-                  刷新
-                </Button>
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -450,6 +640,11 @@ export default function ExportPage() {
                             >
                               {task.format.toUpperCase()}
                             </Badge>
+                            {task.platformFilter && (
+                              <Badge variant="default" size="sm">
+                                {PLATFORM_OPTIONS.find((p) => p.value === task.platformFilter)?.label || task.platformFilter}
+                              </Badge>
+                            )}
                           </div>
                           <div className="flex items-center gap-4 mt-1 text-xs text-gray-500">
                             <span className="flex items-center gap-1">
@@ -457,12 +652,16 @@ export default function ExportPage() {
                               {task.issueCount} 个问题
                             </span>
                             <span className="flex items-center gap-1">
+                              <ShoppingBag className="w-3.5 h-3.5" />
+                              {task.productCount} 个商品
+                            </span>
+                            <span className="flex items-center gap-1">
                               <Calendar className="w-3.5 h-3.5" />
                               {formatDate(task.createdAt)}
                             </span>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
                           <Badge
                             variant={
                               task.status === 'completed'
@@ -482,12 +681,22 @@ export default function ExportPage() {
                               : '失败'}
                           </Badge>
                           {task.status === 'completed' && (
-                            <button
-                              onClick={() => {}}
-                              className="p-2 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors"
-                            >
-                              <Download className="w-4 h-4" />
-                            </button>
+                            <>
+                              <button
+                                onClick={() => handlePreviewTask(task)}
+                                className="p-2 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                                title="查看详情"
+                              >
+                                <Info className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleRedownload(task)}
+                                className="p-2 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors"
+                                title="重新下载"
+                              >
+                                <Download className="w-4 h-4" />
+                              </button>
+                            </>
                           )}
                         </div>
                       </div>
@@ -513,11 +722,11 @@ export default function ExportPage() {
             </CardHeader>
             <CardContent>
               <div className="space-y-3 text-sm text-gray-600">
-                <p>1. 导出文件包含问题清单和修改建议</p>
-                <p>2. 可按严重程度、问题类型、负责人筛选</p>
-                <p>3. Excel格式支持多工作表和格式美化</p>
-                <p>4. CSV格式体积小，兼容性更好</p>
-                <p>5. 导出记录会保存在历史记录中</p>
+                <p>1. 导出文件包含完整问题清单和修改建议</p>
+                <p>2. 支持按平台、严重程度、负责人、状态组合筛选</p>
+                <p>3. 每条记录包含负责人和处理状态</p>
+                <p>4. 历史任务可随时重新下载</p>
+                <p>5. Excel格式支持多工作表和格式美化</p>
               </div>
             </CardContent>
           </Card>
@@ -561,6 +770,65 @@ export default function ExportPage() {
 
           <Card>
             <CardHeader>
+              <CardTitle className="text-base">处理进度</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                <div>
+                  <div className="flex items-center justify-between text-sm mb-1.5">
+                    <span className="text-gray-600">总体处理率</span>
+                    <span className="font-medium text-gray-900">
+                      {issues.length > 0
+                        ? Math.round(
+                            (issues.filter((i) => i.status === 'resolved').length /
+                              issues.length) *
+                              100
+                          )
+                        : 0}
+                      %
+                    </span>
+                  </div>
+                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-success-400 to-success-600 rounded-full"
+                      style={{
+                        width: `${
+                          issues.length > 0
+                            ? (issues.filter((i) => i.status === 'resolved').length /
+                                issues.length) *
+                              100
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="p-2 bg-gray-50 rounded-lg">
+                    <p className="text-lg font-bold text-gray-900">
+                      {issues.filter((i) => i.status === 'pending').length}
+                    </p>
+                    <p className="text-xs text-gray-500">待处理</p>
+                  </div>
+                  <div className="p-2 bg-gray-50 rounded-lg">
+                    <p className="text-lg font-bold text-warning-600">
+                      {issues.filter((i) => i.status === 'processing').length}
+                    </p>
+                    <p className="text-xs text-gray-500">处理中</p>
+                  </div>
+                  <div className="p-2 bg-gray-50 rounded-lg">
+                    <p className="text-lg font-bold text-success-600">
+                      {issues.filter((i) => i.status === 'resolved').length}
+                    </p>
+                    <p className="text-xs text-gray-500">已完成</p>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
               <CardTitle className="text-base">快捷入口</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -578,17 +846,103 @@ export default function ExportPage() {
                 </div>
                 <ChevronRight className="w-4 h-4 text-gray-400" />
               </button>
-              <button className="w-full flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 transition-colors text-left">
-                <div className="flex items-center gap-3">
-                  <Info className="w-5 h-5 text-gray-400" />
-                  <span className="text-sm text-gray-700">导出模板</span>
-                </div>
-                <ChevronRight className="w-4 h-4 text-gray-400" />
-              </button>
             </CardContent>
           </Card>
         </div>
       </div>
+
+      <Modal
+        isOpen={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        title="导出任务详情"
+        size="lg"
+        footer={
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => setPreviewOpen(false)}>
+              关闭
+            </Button>
+            {previewTask && (
+              <Button variant="primary" onClick={() => handleRedownload(previewTask)}>
+                <Download className="w-4 h-4" />
+                重新下载
+              </Button>
+            )}
+          </div>
+        }
+      >
+        {previewTask && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">任务名称</p>
+                <p className="text-sm font-medium text-gray-900 mt-1">{previewTask.name}</p>
+              </div>
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">导出格式</p>
+                <p className="text-sm font-medium text-gray-900 mt-1">
+                  {previewTask.format.toUpperCase()}
+                </p>
+              </div>
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">问题数量</p>
+                <p className="text-sm font-medium text-gray-900 mt-1">{previewTask.issueCount}</p>
+              </div>
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">商品数量</p>
+                <p className="text-sm font-medium text-gray-900 mt-1">{previewTask.productCount}</p>
+              </div>
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">导出时间</p>
+                <p className="text-sm font-medium text-gray-900 mt-1">
+                  {formatDate(previewTask.createdAt)}
+                </p>
+              </div>
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-xs text-gray-500">导出人</p>
+                <p className="text-sm font-medium text-gray-900 mt-1">{previewTask.createdBy}</p>
+              </div>
+            </div>
+
+            {previewTask.issueSnapshots && previewTask.issueSnapshots.length > 0 && (
+              <div>
+                <p className="text-sm font-medium text-gray-700 mb-2">问题清单预览（前10条）</p>
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="max-h-64 overflow-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 sticky top-0">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-medium text-gray-600">商品标题</th>
+                          <th className="px-3 py-2 text-left font-medium text-gray-600">问题类型</th>
+                          <th className="px-3 py-2 text-left font-medium text-gray-600">严重程度</th>
+                          <th className="px-3 py-2 text-left font-medium text-gray-600">状态</th>
+                          <th className="px-3 py-2 text-left font-medium text-gray-600">负责人</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {previewTask.issueSnapshots.slice(0, 10).map((snap, idx) => (
+                          <tr key={idx}>
+                            <td className="px-3 py-2 text-gray-900 line-clamp-1 max-w-xs">{snap.productTitle}</td>
+                            <td className="px-3 py-2 text-gray-700">
+                              {ISSUE_TYPE_LABELS[snap.issueType as keyof typeof ISSUE_TYPE_LABELS] || snap.issueType}
+                            </td>
+                            <td className="px-3 py-2 text-gray-700">
+                              {SEVERITY_LABELS[snap.severity as keyof typeof SEVERITY_LABELS] || snap.severity}
+                            </td>
+                            <td className="px-3 py-2 text-gray-700">
+                              {STATUS_LABELS[snap.status as keyof typeof STATUS_LABELS] || snap.status}
+                            </td>
+                            <td className="px-3 py-2 text-gray-700">{snap.assigneeName || '未分配'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
