@@ -38,3 +38,15 @@ export interface Assignee {
   avatar?: string;
   taskCount: number;
 }
+
+export interface FilterPreset {
+  id: string;
+  name: string;
+  scope: ExportScope;
+  severityFilter?: string[];
+  typeFilter?: string[];
+  assigneeFilter?: string;
+  platformFilter?: string;
+  statusFilter?: string;
+  createdAt: string;
+}

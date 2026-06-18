@@ -15,6 +15,7 @@ import {
   LayoutGrid,
   ListChecks,
   Lightbulb,
+  KanbanSquare,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -52,7 +53,7 @@ const statusColors: Record<IssueStatus, string> = {
   resolved: 'bg-green-100 text-green-700',
 };
 
-type ViewMode = 'by_type' | 'by_assignee';
+type ViewMode = 'by_type' | 'by_assignee' | 'kanban';
 
 export default function FixesPage() {
   const {
@@ -60,19 +61,37 @@ export default function FixesPage() {
     bulkAssignIssues,
     bulkUpdateStatus,
     getFilteredIssues,
+    updateIssueStatus,
+    setSelectedBatchFilter,
   } = useIssueStore();
   const { assignees } = useTaskStore();
-  const { products } = useProductStore();
+  const { products, batches, selectedBatchId, setSelectedBatchId } = useProductStore();
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const [selectedIssues, setSelectedIssues] = useState<Set<string>>(new Set());
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [selectedAssignee, setSelectedAssignee] = useState('');
   const [filterStatus, setFilterStatus] = useState<IssueStatus | 'all'>('all');
   const [viewMode, setViewMode] = useState<ViewMode>('by_type');
+  const [expandedSuggestions, setExpandedSuggestions] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     useIssueStore.getState().refreshAssigneeTaskCounts();
   }, []);
+
+  const handleBatchChange = (batchId: string | 'all') => {
+    setSelectedBatchId(batchId);
+    setSelectedBatchFilter(batchId);
+  };
+
+  const toggleSuggestion = (issueId: string) => {
+    const newExpanded = new Set(expandedSuggestions);
+    if (newExpanded.has(issueId)) {
+      newExpanded.delete(issueId);
+    } else {
+      newExpanded.add(issueId);
+    }
+    setExpandedSuggestions(newExpanded);
+  };
 
   const toggleExpand = (key: string) => {
     const newExpanded = new Set(expandedKeys);
@@ -133,19 +152,21 @@ export default function FixesPage() {
     return 'info';
   };
 
+  const filteredIssues = getFilteredIssues();
+
   const stats = {
-    pending: issues.filter((i) => i.status === 'pending').length,
-    processing: issues.filter((i) => i.status === 'processing').length,
-    resolved: issues.filter((i) => i.status === 'resolved').length,
+    pending: filteredIssues.filter((i) => i.status === 'pending').length,
+    processing: filteredIssues.filter((i) => i.status === 'processing').length,
+    resolved: filteredIssues.filter((i) => i.status === 'resolved').length,
   };
 
-  const filteredIssues = issues.filter((issue) => {
+  const statusFilteredIssues = filteredIssues.filter((issue) => {
     if (filterStatus !== 'all' && issue.status !== filterStatus) return false;
     return true;
   });
 
   const issuesByType = new Map<string, CheckIssue[]>();
-  filteredIssues.forEach((issue) => {
+  statusFilteredIssues.forEach((issue) => {
     const list = issuesByType.get(issue.type) || [];
     list.push(issue);
     issuesByType.set(issue.type, list);
@@ -156,7 +177,7 @@ export default function FixesPage() {
 
   const issuesByAssignee = new Map<string, CheckIssue[]>();
   const unassignedKey = '__unassigned__';
-  filteredIssues.forEach((issue) => {
+  statusFilteredIssues.forEach((issue) => {
     const key = issue.assignee || unassignedKey;
     const list = issuesByAssignee.get(key) || [];
     list.push(issue);
@@ -165,6 +186,12 @@ export default function FixesPage() {
   const assigneeEntries = Array.from(issuesByAssignee.entries()).sort(
     (a, b) => b[1].length - a[1].length
   );
+
+  const issuesByStatus: Record<IssueStatus, CheckIssue[]> = {
+    pending: filteredIssues.filter((i) => i.status === 'pending'),
+    processing: filteredIssues.filter((i) => i.status === 'processing'),
+    resolved: filteredIssues.filter((i) => i.status === 'resolved'),
+  };
 
   const getAssigneeName = (assigneeId: string) => {
     if (assigneeId === unassignedKey) return '未分配';
@@ -175,6 +202,147 @@ export default function FixesPage() {
   const getAssigneeInfo = (assigneeId: string) => {
     if (assigneeId === unassignedKey) return null;
     return assignees.find((a) => a.id === assigneeId) || null;
+  };
+
+  const renderKanbanCard = (issue: CheckIssue) => {
+    const SeverityIcon = severityIcons[issue.severity];
+    const isSuggestionExpanded = expandedSuggestions.has(issue.id);
+
+    return (
+      <Card key={issue.id} className="hover:shadow-card transition-shadow">
+        <CardContent className="p-4 space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm font-medium text-gray-900 line-clamp-1 flex-1 min-w-0">
+              {issue.productTitle}
+            </p>
+            <Badge
+              variant={
+                issue.severity === 'critical'
+                  ? 'danger'
+                  : issue.severity === 'warning'
+                  ? 'warning'
+                  : 'info'
+              }
+              size="sm"
+            >
+              <SeverityIcon className="w-3 h-3 mr-0.5" />
+              {SEVERITY_LABELS[issue.severity]}
+            </Badge>
+          </div>
+
+          <p className="text-sm text-gray-600 line-clamp-2">{issue.description}</p>
+
+          <div>
+            <button
+              onClick={() => toggleSuggestion(issue.id)}
+              className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 font-medium"
+            >
+              <Lightbulb className="w-3.5 h-3.5" />
+              修改建议
+              {isSuggestionExpanded ? (
+                <ChevronDown className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronRight className="w-3.5 h-3.5" />
+              )}
+            </button>
+            {isSuggestionExpanded && (
+              <p className="mt-2 text-xs text-amber-700 bg-amber-50 p-2 rounded-lg border border-amber-100">
+                {issue.suggestion}
+              </p>
+            )}
+          </div>
+
+          {issue.assigneeName && (
+            <div className="flex items-center gap-1.5 text-xs text-gray-500">
+              <div className="w-5 h-5 rounded-full bg-primary-100 flex items-center justify-center">
+                <User className="w-3 h-3 text-primary-600" />
+              </div>
+              {issue.assigneeName}
+            </div>
+          )}
+
+          <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-lg">
+            {(['pending', 'processing', 'resolved'] as const).map((status) => (
+              <button
+                key={status}
+                onClick={() => updateIssueStatus(issue.id, status)}
+                className={cn(
+                  'flex-1 px-2 py-1 rounded-md text-xs font-medium transition-all',
+                  issue.status === status
+                    ? status === 'pending'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : status === 'processing'
+                      ? 'bg-white text-blue-700 shadow-sm'
+                      : 'bg-white text-green-700 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                )}
+              >
+                {STATUS_LABELS[status]}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const renderKanbanView = () => {
+    const columns: { status: IssueStatus; title: string; color: string; icon: React.ReactNode }[] = [
+      {
+        status: 'pending',
+        title: '待处理',
+        color: 'bg-gray-100 text-gray-700',
+        icon: <Clock className="w-4 h-4" />,
+      },
+      {
+        status: 'processing',
+        title: '处理中',
+        color: 'bg-blue-100 text-blue-700',
+        icon: <Wrench className="w-4 h-4" />,
+      },
+      {
+        status: 'resolved',
+        title: '已完成',
+        color: 'bg-green-100 text-green-700',
+        icon: <CheckCircle2 className="w-4 h-4" />,
+      },
+    ];
+
+    return (
+      <div className="grid grid-cols-3 gap-4">
+        {columns.map((col) => (
+          <Card key={col.status}>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className={cn('w-7 h-7 rounded-lg flex items-center justify-center', col.color)}>
+                    {col.icon}
+                  </div>
+                  <CardTitle className="text-base">{col.title}</CardTitle>
+                </div>
+                <Badge variant="default" size="sm">
+                  {issuesByStatus[col.status].length}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="space-y-3 max-h-[600px] overflow-auto pr-1">
+                {issuesByStatus[col.status].length > 0 ? (
+                  issuesByStatus[col.status].map((issue) => renderKanbanCard(issue))
+                ) : (
+                  <div className="py-8 text-center">
+                    <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center mx-auto mb-2">
+                      <ListChecks className="w-6 h-6 text-gray-300" />
+                    </div>
+                    <p className="text-sm text-gray-400">暂无问题</p>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
   };
 
   const renderIssueItem = (issue: CheckIssue, index: number) => {
@@ -400,10 +568,25 @@ export default function FixesPage() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">批量修正建议</h1>
           <p className="text-sm text-gray-500 mt-1">
-            按问题类型或负责人分组查看，批量分配处理任务
+            按问题类型、负责人分组或看板视图查看，批量分配处理任务
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-500">批次：</span>
+            <select
+              value={selectedBatchId}
+              onChange={(e) => handleBatchChange(e.target.value as string | 'all')}
+              className="h-9 px-3 rounded-lg border border-gray-300 text-sm bg-white focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
+            >
+              <option value="all">全部批次</option>
+              {batches.map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.name} ({batch.productCount}个商品)
+                </option>
+              ))}
+            </select>
+          </div>
           <div className="flex items-center gap-1 p-1 bg-gray-100 rounded-lg">
             <button
               onClick={() => setViewMode('by_type')}
@@ -428,6 +611,18 @@ export default function FixesPage() {
             >
               <Users className="w-4 h-4" />
               按负责人
+            </button>
+            <button
+              onClick={() => setViewMode('kanban')}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-sm font-medium transition-all flex items-center gap-1.5',
+                viewMode === 'kanban'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              )}
+            >
+              <KanbanSquare className="w-4 h-4" />
+              看板视图
             </button>
           </div>
           <Button
@@ -544,244 +739,248 @@ export default function FixesPage() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-4 gap-5">
-        <div className="col-span-3 space-y-4">
-          {viewMode === 'by_type' ? (
-            typeEntries.length > 0 ? (
-              typeEntries.map(([type, typeIssues]) =>
-                renderGroupCard(
-                  `type_${type}`,
-                  ISSUE_TYPE_LABELS[type as keyof typeof ISSUE_TYPE_LABELS] || type,
-                  `共 ${typeIssues.length} 个问题需要处理`,
-                  typeIssues
+      {viewMode === 'kanban' ? (
+        renderKanbanView()
+      ) : (
+        <div className="grid grid-cols-4 gap-5">
+          <div className="col-span-3 space-y-4">
+            {viewMode === 'by_type' ? (
+              typeEntries.length > 0 ? (
+                typeEntries.map(([type, typeIssues]) =>
+                  renderGroupCard(
+                    `type_${type}`,
+                    ISSUE_TYPE_LABELS[type as keyof typeof ISSUE_TYPE_LABELS] || type,
+                    `共 ${typeIssues.length} 个问题需要处理`,
+                    typeIssues
+                  )
                 )
+              ) : (
+                <Card>
+                  <CardContent className="py-16 text-center">
+                    <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                      <Wrench className="w-8 h-8 text-gray-400" />
+                    </div>
+                    <p className="text-lg font-medium text-gray-900 mb-1">暂无修正任务</p>
+                    <p className="text-sm text-gray-500">
+                      完成商品检查后，问题将自动显示在此处
+                    </p>
+                  </CardContent>
+                </Card>
               )
+            ) : assigneeEntries.length > 0 ? (
+              assigneeEntries.map(([assigneeId, assigneeIssues]) => {
+                const assigneeInfo = getAssigneeInfo(assigneeId);
+                const headerIcon = assigneeInfo ? (
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center text-white font-medium">
+                    {assigneeInfo.name.charAt(0)}
+                  </div>
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
+                    <User className="w-5 h-5 text-gray-500" />
+                  </div>
+                );
+
+                return renderGroupCard(
+                  `assignee_${assigneeId}`,
+                  getAssigneeName(assigneeId),
+                  assigneeInfo
+                    ? `${assigneeInfo.role} · 共 ${assigneeIssues.length} 个问题`
+                    : `共 ${assigneeIssues.length} 个问题待分配`,
+                  assigneeIssues,
+                  headerIcon
+                );
+              })
             ) : (
               <Card>
                 <CardContent className="py-16 text-center">
                   <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                    <Wrench className="w-8 h-8 text-gray-400" />
+                    <Users className="w-8 h-8 text-gray-400" />
                   </div>
-                  <p className="text-lg font-medium text-gray-900 mb-1">暂无修正任务</p>
+                  <p className="text-lg font-medium text-gray-900 mb-1">暂无负责人数据</p>
                   <p className="text-sm text-gray-500">
-                    完成商品检查后，问题将自动显示在此处
+                    分配问题后，可在此处按负责人查看待办
                   </p>
                 </CardContent>
               </Card>
-            )
-          ) : assigneeEntries.length > 0 ? (
-            assigneeEntries.map(([assigneeId, assigneeIssues]) => {
-              const assigneeInfo = getAssigneeInfo(assigneeId);
-              const headerIcon = assigneeInfo ? (
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center text-white font-medium">
-                  {assigneeInfo.name.charAt(0)}
-                </div>
-              ) : (
-                <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
-                  <User className="w-5 h-5 text-gray-500" />
-                </div>
-              );
+            )}
+          </div>
 
-              return renderGroupCard(
-                `assignee_${assigneeId}`,
-                getAssigneeName(assigneeId),
-                assigneeInfo
-                  ? `${assigneeInfo.role} · 共 ${assigneeIssues.length} 个问题`
-                  : `共 ${assigneeIssues.length} 个问题待分配`,
-                assigneeIssues,
-                headerIcon
-              );
-            })
-          ) : (
+          <div className="space-y-5">
             <Card>
-              <CardContent className="py-16 text-center">
-                <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                  <Users className="w-8 h-8 text-gray-400" />
-                </div>
-                <p className="text-lg font-medium text-gray-900 mb-1">暂无负责人数据</p>
-                <p className="text-sm text-gray-500">
-                  分配问题后，可在此处按负责人查看待办
-                </p>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+              <CardHeader>
+                <CardTitle className="text-base">负责人工作量</CardTitle>
+                <CardDescription>按未完成任务排序</CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="divide-y divide-gray-50">
+                  {assignees
+                    .slice()
+                    .sort((a, b) => b.taskCount - a.taskCount)
+                    .map((assignee) => {
+                      const personalIssues = filteredIssues.filter(
+                        (i) => i.assignee === assignee.id
+                      );
+                      const completed = personalIssues.filter(
+                        (i) => i.status === 'resolved'
+                      ).length;
+                      const total = personalIssues.length;
+                      const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-        <div className="space-y-5">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">负责人工作量</CardTitle>
-              <CardDescription>按未完成任务排序</CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="divide-y divide-gray-50">
-                {assignees
-                  .slice()
-                  .sort((a, b) => b.taskCount - a.taskCount)
-                  .map((assignee) => {
-                    const personalIssues = issues.filter(
-                      (i) => i.assignee === assignee.id
-                    );
-                    const completed = personalIssues.filter(
-                      (i) => i.status === 'resolved'
-                    ).length;
-                    const total = personalIssues.length;
-                    const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-                    return (
-                      <div
-                        key={assignee.id}
-                        className={cn(
-                          'px-4 py-3 transition-colors cursor-pointer',
-                          viewMode === 'by_assignee' &&
-                            expandedKeys.has(`assignee_${assignee.id}`) &&
-                            'bg-primary-50/50'
-                        )}
-                        onClick={() => {
-                          setViewMode('by_assignee');
-                          const newExpanded = new Set(expandedKeys);
-                          if (newExpanded.has(`assignee_${assignee.id}`)) {
-                            newExpanded.delete(`assignee_${assignee.id}`);
-                          } else {
-                            newExpanded.add(`assignee_${assignee.id}`);
-                          }
-                          setExpandedKeys(newExpanded);
-                        }}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center text-white text-sm font-medium">
-                            {assignee.name.charAt(0)}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between">
-                              <p className="text-sm font-medium text-gray-900">
-                                {assignee.name}
-                              </p>
-                              <Badge
-                                variant={
-                                  assignee.taskCount > 5
-                                    ? 'danger'
-                                    : assignee.taskCount > 2
-                                    ? 'warning'
-                                    : 'primary'
-                                }
-                                size="sm"
-                              >
-                                {assignee.taskCount} 待办
-                              </Badge>
+                      return (
+                        <div
+                          key={assignee.id}
+                          className={cn(
+                            'px-4 py-3 transition-colors cursor-pointer',
+                            viewMode === 'by_assignee' &&
+                              expandedKeys.has(`assignee_${assignee.id}`) &&
+                              'bg-primary-50/50'
+                          )}
+                          onClick={() => {
+                            setViewMode('by_assignee');
+                            const newExpanded = new Set(expandedKeys);
+                            if (newExpanded.has(`assignee_${assignee.id}`)) {
+                              newExpanded.delete(`assignee_${assignee.id}`);
+                            } else {
+                              newExpanded.add(`assignee_${assignee.id}`);
+                            }
+                            setExpandedKeys(newExpanded);
+                          }}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-primary-400 to-primary-600 flex items-center justify-center text-white text-sm font-medium">
+                              {assignee.name.charAt(0)}
                             </div>
-                            <p className="text-xs text-gray-500 mt-0.5">{assignee.role}</p>
-                            {total > 0 && (
-                              <div className="mt-2">
-                                <div className="flex items-center justify-between text-xs mb-1">
-                                  <span className="text-gray-500">完成率</span>
-                                  <span className="font-medium text-gray-700">{percent}%</span>
-                                </div>
-                                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                                  <div
-                                    className="h-full bg-gradient-to-r from-success-400 to-success-600 rounded-full"
-                                    style={{ width: `${percent}%` }}
-                                  />
-                                </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <p className="text-sm font-medium text-gray-900">
+                                  {assignee.name}
+                                </p>
+                                <Badge
+                                  variant={
+                                    assignee.taskCount > 5
+                                      ? 'danger'
+                                      : assignee.taskCount > 2
+                                      ? 'warning'
+                                      : 'primary'
+                                  }
+                                  size="sm"
+                                >
+                                  {assignee.taskCount} 待办
+                                </Badge>
                               </div>
-                            )}
+                              <p className="text-xs text-gray-500 mt-0.5">{assignee.role}</p>
+                              {total > 0 && (
+                                <div className="mt-2">
+                                  <div className="flex items-center justify-between text-xs mb-1">
+                                    <span className="text-gray-500">完成率</span>
+                                    <span className="font-medium text-gray-700">{percent}%</span>
+                                  </div>
+                                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                                    <div
+                                      className="h-full bg-gradient-to-r from-success-400 to-success-600 rounded-full"
+                                      style={{ width: `${percent}%` }}
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            </CardContent>
-          </Card>
+                      );
+                    })}
+                </div>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">总体处理进度</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div>
-                  <div className="flex items-center justify-between text-sm mb-1.5">
-                    <span className="text-gray-600">总体进度</span>
-                    <span className="font-medium text-gray-900">
-                      {issues.length > 0
-                        ? Math.round((stats.resolved / issues.length) * 100)
-                        : 0}
-                      %
-                    </span>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">总体处理进度</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div>
+                    <div className="flex items-center justify-between text-sm mb-1.5">
+                      <span className="text-gray-600">总体进度</span>
+                      <span className="font-medium text-gray-900">
+                        {filteredIssues.length > 0
+                          ? Math.round((stats.resolved / filteredIssues.length) * 100)
+                          : 0}
+                        %
+                      </span>
+                    </div>
+                    <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-primary-500 to-primary-600 rounded-full transition-all duration-500"
+                        style={{
+                          width: `${
+                            filteredIssues.length > 0
+                              ? (stats.resolved / filteredIssues.length) * 100
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </div>
                   </div>
-                  <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-primary-500 to-primary-600 rounded-full transition-all duration-500"
-                      style={{
-                        width: `${
-                          issues.length > 0
-                            ? (stats.resolved / issues.length) * 100
-                            : 0
-                        }%`,
-                      }}
-                    />
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="p-2 bg-gray-50 rounded-lg">
+                      <p className="text-lg font-bold text-gray-900">{stats.pending}</p>
+                      <p className="text-xs text-gray-500">待处理</p>
+                    </div>
+                    <div className="p-2 bg-gray-50 rounded-lg">
+                      <p className="text-lg font-bold text-warning-600">
+                        {stats.processing}
+                      </p>
+                      <p className="text-xs text-gray-500">处理中</p>
+                    </div>
+                    <div className="p-2 bg-gray-50 rounded-lg">
+                      <p className="text-lg font-bold text-success-600">{stats.resolved}</p>
+                      <p className="text-xs text-gray-500">已完成</p>
+                    </div>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="p-2 bg-gray-50 rounded-lg">
-                    <p className="text-lg font-bold text-gray-900">{stats.pending}</p>
-                    <p className="text-xs text-gray-500">待处理</p>
-                  </div>
-                  <div className="p-2 bg-gray-50 rounded-lg">
-                    <p className="text-lg font-bold text-warning-600">
-                      {stats.processing}
-                    </p>
-                    <p className="text-xs text-gray-500">处理中</p>
-                  </div>
-                  <div className="p-2 bg-gray-50 rounded-lg">
-                    <p className="text-lg font-bold text-success-600">{stats.resolved}</p>
-                    <p className="text-xs text-gray-500">已完成</p>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">快捷操作</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <Button
-                variant="primary"
-                size="sm"
-                fullWidth
-                onClick={() => setShowAssignModal(true)}
-                disabled={selectedIssues.size === 0}
-              >
-                <Send className="w-4 h-4" />
-                批量分配任务
-                {selectedIssues.size > 0 && ` (${selectedIssues.size})`}
-              </Button>
-              <Button
-                variant="success"
-                size="sm"
-                fullWidth
-                onClick={handleMarkResolved}
-                disabled={selectedIssues.size === 0}
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                批量标记完成
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                fullWidth
-                onClick={() => setSelectedIssues(new Set())}
-                disabled={selectedIssues.size === 0}
-              >
-                清除选择
-              </Button>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">快捷操作</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  fullWidth
+                  onClick={() => setShowAssignModal(true)}
+                  disabled={selectedIssues.size === 0}
+                >
+                  <Send className="w-4 h-4" />
+                  批量分配任务
+                  {selectedIssues.size > 0 && ` (${selectedIssues.size})`}
+                </Button>
+                <Button
+                  variant="success"
+                  size="sm"
+                  fullWidth
+                  onClick={handleMarkResolved}
+                  disabled={selectedIssues.size === 0}
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  批量标记完成
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  fullWidth
+                  onClick={() => setSelectedIssues(new Set())}
+                  disabled={selectedIssues.size === 0}
+                >
+                  清除选择
+                </Button>
+              </CardContent>
+            </Card>
+          </div>
         </div>
-      </div>
+      )}
 
       <Modal
         isOpen={showAssignModal}

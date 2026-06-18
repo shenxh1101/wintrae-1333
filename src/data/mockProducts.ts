@@ -1,7 +1,18 @@
-import type { Product } from '../types/product';
+import type { Product, ImportBatch } from '../types/product';
 import { generateId } from '../utils/format';
 
 const now = new Date().toISOString();
+const defaultBatchId = 'batch_mock_001';
+
+export const mockBatches: ImportBatch[] = [
+  {
+    id: defaultBatchId,
+    name: '示例数据批次',
+    importedAt: now,
+    productCount: 8,
+    platform: 'taobao',
+  },
+];
 
 export const mockProducts: Product[] = [
   {
@@ -36,6 +47,7 @@ export const mockProducts: Product[] = [
     },
     platform: 'taobao',
     category: '男装/T恤',
+    batchId: defaultBatchId,
     createdAt: now,
     updatedAt: now,
   },
@@ -58,6 +70,7 @@ export const mockProducts: Product[] = [
     },
     platform: 'taobao',
     category: '男装/短裤',
+    batchId: defaultBatchId,
     createdAt: now,
     updatedAt: now,
   },
@@ -75,6 +88,7 @@ export const mockProducts: Product[] = [
     logistics: {},
     platform: 'jd',
     category: '男装/T恤',
+    batchId: defaultBatchId,
     createdAt: now,
     updatedAt: now,
   },
@@ -105,6 +119,7 @@ export const mockProducts: Product[] = [
     },
     platform: 'pdd',
     category: '女装/连衣裙',
+    batchId: defaultBatchId,
     createdAt: now,
     updatedAt: now,
   },
@@ -137,6 +152,7 @@ export const mockProducts: Product[] = [
     },
     platform: 'douyin',
     category: '数码/智能穿戴',
+    batchId: defaultBatchId,
     createdAt: now,
     updatedAt: now,
   },
@@ -169,6 +185,7 @@ export const mockProducts: Product[] = [
     },
     platform: 'taobao',
     category: '男鞋/运动鞋',
+    batchId: defaultBatchId,
     createdAt: now,
     updatedAt: now,
   },
@@ -202,6 +219,7 @@ export const mockProducts: Product[] = [
     },
     platform: 'taobao',
     category: '家居/水杯',
+    batchId: defaultBatchId,
     createdAt: now,
     updatedAt: now,
   },
@@ -226,6 +244,7 @@ export const mockProducts: Product[] = [
     },
     platform: 'jd',
     category: '箱包/双肩包',
+    batchId: defaultBatchId,
     createdAt: now,
     updatedAt: now,
   },

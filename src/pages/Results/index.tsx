@@ -15,6 +15,7 @@ import {
   Clock,
   Lightbulb,
   CheckCircle2,
+  Package,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import Button from '@/components/ui/Button';
@@ -67,30 +68,38 @@ export default function ResultsPage() {
     assignIssue,
     getIssuesByProduct,
     bulkUpdateStatus,
+    setSelectedBatchFilter,
   } = useIssueStore();
-  const { products, lastImportedAt } = useProductStore();
+  const {
+    products,
+    lastImportedAt,
+    batches,
+    selectedBatchId,
+    setSelectedBatchId,
+    needsRecheck,
+    setLastCheckedAt,
+    lastCheckedAt,
+    getProductsByBatch,
+  } = useProductStore();
   const { rules } = useRuleStore();
   const { assignees } = useTaskStore();
   const [isChecking, setIsChecking] = useState(false);
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [showBatchDropdown, setShowBatchDropdown] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [selectedAssigneeId, setSelectedAssigneeId] = useState('');
   const [assigningIssueId, setAssigningIssueId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!hasChecked && products.length > 0) {
+    const shouldCheck =
+      !hasChecked ||
+      needsRecheck ||
+      (lastImportedAt && lastCheckedAt && new Date(lastImportedAt) > new Date(lastCheckedAt));
+    if (shouldCheck && products.length > 0) {
       handleRunCheck();
     }
   }, []);
-
-  useEffect(() => {
-    if (hasChecked && lastImportedAt) {
-      const issuesLatest = issues.length > 0 ? issues[0]?.createdAt : null;
-      if (!issuesLatest || new Date(lastImportedAt) > new Date(issuesLatest)) {
-      }
-    }
-  }, [lastImportedAt]);
 
   const filteredIssues = getFilteredIssues();
 
@@ -103,14 +112,25 @@ export default function ResultsPage() {
 
   const productEntries = Array.from(productIssueMap.entries());
 
+  const filteredProducts = getProductsByBatch(selectedBatchId);
+  const filteredProductCount = filteredProducts.length;
+  const filteredIssueCount = filteredIssues.length;
+
   const handleRunCheck = () => {
     setIsChecking(true);
     setTimeout(() => {
       const result = runCheck(products, rules);
       setIssues(result.issues);
       setHasChecked(true);
+      setLastCheckedAt(new Date().toISOString());
       setIsChecking(false);
     }, 800);
+  };
+
+  const handleSelectBatch = (batchId: string | 'all') => {
+    setSelectedBatchId(batchId);
+    setSelectedBatchFilter(batchId);
+    setShowBatchDropdown(false);
   };
 
   const handleMarkResolved = (issueId: string) => {
@@ -158,13 +178,40 @@ export default function ResultsPage() {
     return 'info';
   };
 
+  const currentBatchName =
+    selectedBatchId === 'all'
+      ? '全部商品'
+      : batches.find((b) => b.id === selectedBatchId)?.name || '全部商品';
+
   return (
     <div className="space-y-6">
+      {needsRecheck && (
+        <div className="flex items-center justify-between p-4 bg-amber-50 border border-amber-200 rounded-xl">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0">
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
+            </div>
+            <p className="text-sm text-amber-800">
+              检测到新导入的商品尚未检查，是否立即重新检查？
+            </p>
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={handleRunCheck}
+            loading={isChecking}
+          >
+            <Play className="w-4 h-4" />
+            立即检查
+          </Button>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">检查结果</h1>
           <p className="text-sm text-gray-500 mt-1">
-            共发现 {issues.length} 个问题，涉及 {productIssueMap.size} 个商品
+            共发现 {filteredIssueCount} 个问题，涉及 {productIssueMap.size} / {filteredProductCount} 个商品
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -188,7 +235,77 @@ export default function ResultsPage() {
         <div className="flex-1 space-y-4">
           <Card>
             <CardContent className="p-4">
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="relative">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowBatchDropdown(!showBatchDropdown)}
+                  >
+                    <Package className="w-4 h-4" />
+                    {currentBatchName}
+                    <ChevronDown className="w-4 h-4" />
+                  </Button>
+                  {showBatchDropdown && (
+                    <div className="absolute top-full left-0 mt-2 w-72 bg-white rounded-xl shadow-card-lg border border-gray-100 z-10 overflow-hidden">
+                      <div className="p-2 max-h-72 overflow-auto">
+                        <button
+                          onClick={() => handleSelectBatch('all')}
+                          className={cn(
+                            'w-full flex items-center gap-3 px-3 py-2 text-left text-sm rounded-lg transition-colors',
+                            selectedBatchId === 'all'
+                              ? 'bg-primary-50 text-primary-700'
+                              : 'hover:bg-gray-50 text-gray-700'
+                          )}
+                        >
+                          <Package className="w-4 h-4 flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium">全部商品</p>
+                          </div>
+                          <span className="text-xs text-gray-500">
+                            {products.length} 件
+                          </span>
+                        </button>
+                        {batches.length > 0 && <div className="h-px bg-gray-100 my-1" />}
+                        {batches.length === 0 ? (
+                          <p className="text-sm text-gray-400 text-center py-4">
+                            暂无批次
+                          </p>
+                        ) : (
+                          batches.map((batch) => {
+                            const isSelected = selectedBatchId === batch.id;
+                            return (
+                              <button
+                                key={batch.id}
+                                onClick={() => handleSelectBatch(batch.id)}
+                                className={cn(
+                                  'w-full flex items-center gap-3 px-3 py-2 text-left text-sm rounded-lg transition-colors',
+                                  isSelected
+                                    ? 'bg-primary-50 text-primary-700'
+                                    : 'hover:bg-gray-50 text-gray-700'
+                                )}
+                              >
+                                <Package className="w-4 h-4 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-medium line-clamp-1">
+                                    {batch.name}
+                                  </p>
+                                  <p className="text-xs text-gray-400">
+                                    {formatDate(batch.importedAt)}
+                                  </p>
+                                </div>
+                                <span className="text-xs text-gray-500">
+                                  {batch.productCount} 件
+                                </span>
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="relative flex-1 max-w-md">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input

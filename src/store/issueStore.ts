@@ -12,6 +12,7 @@ interface IssueState {
   hasChecked: boolean;
   selectedPlatform: string;
   selectedAssigneeFilter: string;
+  selectedBatchFilter: string | 'all';
   setIssues: (issues: CheckIssue[]) => void;
   addIssue: (issue: CheckIssue) => void;
   updateIssue: (id: string, updates: Partial<CheckIssue>) => void;
@@ -30,8 +31,10 @@ interface IssueState {
   getFilteredIssues: () => CheckIssue[];
   getIssuesByProduct: (productId: string) => CheckIssue[];
   getIssuesByAssignee: (assigneeId: string) => CheckIssue[];
+  getIssuesByBatch: (batchId: string | 'all') => CheckIssue[];
   setSelectedPlatform: (platform: string) => void;
   setSelectedAssigneeFilter: (assignee: string) => void;
+  setSelectedBatchFilter: (batchId: string | 'all') => void;
   refreshAssigneeTaskCounts: () => void;
 }
 
@@ -49,6 +52,10 @@ const syncAssigneeTaskCounts = (issues: CheckIssue[]) => {
   setStorage('assignees', updatedAssignees);
 };
 
+const BATCH_FILTER_KEY = 'issue_batch_filter';
+
+const initialBatchFilter = getStorage<string | 'all'>(BATCH_FILTER_KEY, 'all');
+
 export const useIssueStore = create<IssueState>((set, get) => ({
   issues: initialIssues,
   selectedSeverity: 'all',
@@ -58,6 +65,7 @@ export const useIssueStore = create<IssueState>((set, get) => ({
   hasChecked: false,
   selectedPlatform: 'all',
   selectedAssigneeFilter: 'all',
+  selectedBatchFilter: initialBatchFilter,
 
   setIssues: (issues) => {
     set({ issues, hasChecked: true });
@@ -103,6 +111,10 @@ export const useIssueStore = create<IssueState>((set, get) => ({
   setHasChecked: (checked) => set({ hasChecked: checked }),
   setSelectedPlatform: (platform) => set({ selectedPlatform: platform }),
   setSelectedAssigneeFilter: (assignee) => set({ selectedAssigneeFilter: assignee }),
+  setSelectedBatchFilter: (batchId) => {
+    set({ selectedBatchFilter: batchId });
+    setStorage(BATCH_FILTER_KEY, batchId);
+  },
 
   updateIssueStatus: (id, status) => {
     const issues = get().issues.map((i) => (i.id === id ? { ...i, status } : i));
@@ -147,8 +159,15 @@ export const useIssueStore = create<IssueState>((set, get) => ({
   },
 
   getFilteredIssues: () => {
-    const { issues, selectedSeverity, selectedTypes, searchKeyword, selectedPlatform, selectedAssigneeFilter } = get();
+    const { issues, selectedSeverity, selectedTypes, searchKeyword, selectedPlatform, selectedAssigneeFilter, selectedBatchFilter } = get();
     let filtered = issues;
+
+    if (selectedBatchFilter !== 'all') {
+      filtered = filtered.filter((i) => {
+        const product = useProductStore.getState().getProductById(i.productId);
+        return product?.batchId === selectedBatchFilter;
+      });
+    }
 
     if (selectedSeverity !== 'all') {
       filtered = filtered.filter((i) => i.severity === selectedSeverity);
@@ -191,6 +210,14 @@ export const useIssueStore = create<IssueState>((set, get) => ({
 
   getIssuesByAssignee: (assigneeId) => {
     return get().issues.filter((i) => i.assignee === assigneeId);
+  },
+
+  getIssuesByBatch: (batchId) => {
+    if (batchId === 'all') return get().issues;
+    return get().issues.filter((i) => {
+      const product = useProductStore.getState().getProductById(i.productId);
+      return product?.batchId === batchId;
+    });
   },
 
   refreshAssigneeTaskCounts: () => {

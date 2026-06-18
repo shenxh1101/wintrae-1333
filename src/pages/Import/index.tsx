@@ -10,6 +10,8 @@ import {
   Trash2,
   Play,
   Plus,
+  Package,
+  Calendar,
 } from 'lucide-react';
 import Papa from 'papaparse';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
@@ -20,7 +22,7 @@ import { useProductStore } from '@/store/productStore';
 import { useIssueStore } from '@/store/issueStore';
 import { useRuleStore } from '@/store/ruleStore';
 import { useNavigate } from 'react-router-dom';
-import type { Product, ProductImage, ProductSpec, LogisticsInfo } from '@/types/product';
+import type { Product, ProductImage, ProductSpec, LogisticsInfo, ImportBatch } from '@/types/product';
 import { runCheck } from '@/services/checkEngine';
 import { generateId } from '@/utils/format';
 import { cn } from '@/lib/utils';
@@ -36,7 +38,17 @@ interface ImportStats {
 
 export default function ImportPage() {
   const navigate = useNavigate();
-  const { products, importProducts, setProducts, clearProducts, lastImportedAt } = useProductStore();
+  const {
+    products,
+    importProducts,
+    setProducts,
+    clearProducts,
+    lastImportedAt,
+    batches,
+    selectedBatchId,
+    setLastCheckedAt,
+    setSelectedBatchId,
+  } = useProductStore();
   const { setIssues, setHasChecked, issues } = useIssueStore();
   const { rules } = useRuleStore();
   const [status, setStatus] = useState<ImportStatus>('idle');
@@ -45,6 +57,8 @@ export default function ImportPage() {
   const [selectedPlatform, setSelectedPlatform] = useState('taobao');
   const [showCheckPrompt, setShowCheckPrompt] = useState(false);
   const [isChecking, setIsChecking] = useState(false);
+  const [batchName, setBatchName] = useState('');
+  const [lastBatchName, setLastBatchName] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -191,6 +205,7 @@ export default function ImportPage() {
       logistics,
       platform: row.platform || selectedPlatform,
       category: row.category,
+      batchId: '',
       createdAt: now,
       updatedAt: now,
     };
@@ -199,7 +214,11 @@ export default function ImportPage() {
   const handleImport = () => {
     setStatus('importing');
     setTimeout(() => {
-      importProducts(previewData);
+      const finalBatchName = batchName.trim() || undefined;
+      const returnedBatchId = importProducts(previewData, finalBatchName);
+      const batch = useProductStore.getState().batches.find((b) => b.id === returnedBatchId);
+      setLastBatchName(batch?.name || '');
+      setBatchName('');
       setStatus('success');
       setShowCheckPrompt(true);
     }, 800);
@@ -214,6 +233,7 @@ export default function ImportPage() {
       const result = runCheck(currentProducts, currentRules);
       setIssues(result.issues);
       setHasChecked(true);
+      setLastCheckedAt(new Date().toISOString());
       setIsChecking(false);
       navigate('/results');
     }, 800);
@@ -227,6 +247,7 @@ export default function ImportPage() {
     setStatus('idle');
     setPreviewData([]);
     setStats({ total: 0, success: 0, failed: 0, skipped: 0 });
+    setBatchName('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -237,6 +258,17 @@ export default function ImportPage() {
       clearProducts();
     }
   };
+
+  const formatDateTime = (isoString: string) => {
+    return new Date(isoString).toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const selectedBatch = batches.find((b) => b.id === selectedBatchId);
 
   const fileFormats = [
     { icon: FileSpreadsheet, label: 'CSV 表格', desc: '逗号分隔格式' },
@@ -323,6 +355,9 @@ export default function ImportPage() {
                   </div>
                   <p className="text-xl font-bold text-gray-900 mb-1">导入成功！</p>
                   <p className="text-sm text-gray-500 mb-6">
+                    {lastBatchName && (
+                      <span className="block mb-1">批次：{lastBatchName}</span>
+                    )}
                     成功导入 {stats.success} 条商品数据
                   </p>
                   <div className="flex items-center justify-center gap-3">
@@ -422,29 +457,42 @@ export default function ImportPage() {
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between">
+                  <div className="space-y-4">
                     <div className="flex items-center gap-3">
-                      <span className="text-sm text-gray-500">导入平台：</span>
-                      <select
-                        value={selectedPlatform}
-                        onChange={(e) => setSelectedPlatform(e.target.value)}
-                        className="h-9 px-3 rounded-lg border border-gray-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
-                      >
-                        <option value="taobao">淘宝</option>
-                        <option value="jd">京东</option>
-                        <option value="pdd">拼多多</option>
-                        <option value="douyin">抖音</option>
-                      </select>
+                      <label className="text-sm text-gray-500 w-20 flex-shrink-0">批次名称：</label>
+                      <input
+                        type="text"
+                        value={batchName}
+                        onChange={(e) => setBatchName(e.target.value)}
+                        placeholder="可选，留空将自动生成"
+                        className="flex-1 h-9 px-3 rounded-lg border border-gray-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
+                      />
                     </div>
-                    <Button
-                      variant="primary"
-                      size="md"
-                      onClick={handleImport}
-                      loading={(status as string) === 'importing'}
-                    >
-                      <Plus className="w-4 h-4" />
-                      确认导入
-                    </Button>
+
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm text-gray-500 w-20">导入平台：</span>
+                        <select
+                          value={selectedPlatform}
+                          onChange={(e) => setSelectedPlatform(e.target.value)}
+                          className="h-9 px-3 rounded-lg border border-gray-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
+                        >
+                          <option value="taobao">淘宝</option>
+                          <option value="jd">京东</option>
+                          <option value="pdd">拼多多</option>
+                          <option value="douyin">抖音</option>
+                        </select>
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="md"
+                        onClick={handleImport}
+                        loading={(status as string) === 'importing'}
+                      >
+                        <Plus className="w-4 h-4" />
+                        确认导入
+                      </Button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -516,7 +564,71 @@ export default function ImportPage() {
                   </div>
                   <span className="font-bold text-danger-700">-</span>
                 </div>
+
+                {selectedBatchId !== 'all' && selectedBatch && (
+                  <div className="p-3 rounded-lg bg-primary-50 border border-primary-100">
+                    <p className="text-xs text-primary-600 font-medium mb-2">当前选中批次</p>
+                    <p className="font-semibold text-gray-900 truncate">{selectedBatch.name}</p>
+                    <p className="text-sm text-gray-500 mt-1">
+                      <Package className="w-3 h-3 inline mr-1" />
+                      {selectedBatch.productCount} 件商品
+                    </p>
+                  </div>
+                )}
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>批次列表</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {batches.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">暂无导入批次</p>
+              ) : (
+                <div className="space-y-2 max-h-72 overflow-auto">
+                  <button
+                    onClick={() => setSelectedBatchId('all')}
+                    className={cn(
+                      'w-full text-left p-3 rounded-lg border transition-colors',
+                      selectedBatchId === 'all'
+                        ? 'border-primary-300 bg-primary-50'
+                        : 'border-gray-200 hover:bg-gray-50'
+                    )}
+                  >
+                    <div className="flex items-center justify-between">
+                      <p className="font-medium text-gray-900 text-sm">全部商品</p>
+                      <Badge variant="default">{products.length} 件</Badge>
+                    </div>
+                  </button>
+                  {batches.map((batch: ImportBatch) => (
+                    <button
+                      key={batch.id}
+                      onClick={() => setSelectedBatchId(batch.id)}
+                      className={cn(
+                        'w-full text-left p-3 rounded-lg border transition-colors',
+                        selectedBatchId === batch.id
+                          ? 'border-primary-300 bg-primary-50'
+                          : 'border-gray-200 hover:bg-gray-50'
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-gray-900 text-sm truncate">
+                            {batch.name}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
+                            <Calendar className="w-3 h-3" />
+                            {formatDateTime(batch.importedAt)}
+                          </p>
+                        </div>
+                        <Badge variant="default">{batch.productCount} 件</Badge>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -591,7 +703,13 @@ export default function ImportPage() {
               <Play className="w-5 h-5 text-primary-600" />
             </div>
             <div>
-              <p className="font-medium text-gray-900 mb-1">发现 {stats.success} 条新导入的商品</p>
+              <p className="font-medium text-gray-900 mb-1">
+                {lastBatchName ? (
+                  <>批次「{lastBatchName}」共 {stats.success} 条新导入的商品</>
+                ) : (
+                  <>发现 {stats.success} 条新导入的商品</>
+                )}
+              </p>
               <p className="text-sm text-gray-500">
                 是否立即对所有商品执行规则检查？检查完成后可在结果页面查看问题详情。
               </p>

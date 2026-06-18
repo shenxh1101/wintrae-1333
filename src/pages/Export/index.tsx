@@ -15,6 +15,7 @@ import {
   Info,
   X,
   ShoppingBag,
+  Save,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/Card';
@@ -29,7 +30,7 @@ import {
   SEVERITY_LABELS,
   STATUS_LABELS,
 } from '@/types/issue';
-import type { ExportTask, ExportFormat, ExportScope, ExportIssueSnapshot } from '@/types/task';
+import type { ExportTask, ExportFormat, ExportScope, ExportIssueSnapshot, FilterPreset } from '@/types/task';
 import { cn } from '@/lib/utils';
 import { generateId, formatDate } from '@/utils/format';
 
@@ -62,9 +63,20 @@ const STATUS_OPTIONS = [
 
 export default function ExportPage() {
   const { issues } = useIssueStore();
-  const { products } = useProductStore();
-  const { tasks, addTask, assignees, selectedFormat, setSelectedFormat, selectedScope, setSelectedScope } =
-    useTaskStore();
+  const { products, batches, selectedBatchId, setSelectedBatchId } = useProductStore();
+  const {
+    tasks,
+    addTask,
+    assignees,
+    selectedFormat,
+    setSelectedFormat,
+    selectedScope,
+    setSelectedScope,
+    filterPresets,
+    addFilterPreset,
+    deleteFilterPreset,
+    applyFilterPreset,
+  } = useTaskStore();
   const [taskName, setTaskName] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [selectedSeverity, setSelectedSeverity] = useState<string[]>([]);
@@ -74,11 +86,22 @@ export default function ExportPage() {
   const [selectedIssueStatus, setSelectedIssueStatus] = useState('all');
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewTask, setPreviewTask] = useState<ExportTask | null>(null);
+  const [showSavePresetModal, setShowSavePresetModal] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [selectedPresetId, setSelectedPresetId] = useState('');
+  const [showPresetDropdown, setShowPresetDropdown] = useState(false);
 
   const issueTypes = [...new Set(issues.map((i) => i.type))];
 
   const getFilteredIssues = () => {
     let filtered = issues;
+
+    if (selectedBatchId !== 'all') {
+      filtered = filtered.filter((i) => {
+        const product = products.find((p) => p.id === i.productId);
+        return product?.batchId === selectedBatchId;
+      });
+    }
 
     if (selectedScope === 'by_severity' || selectedScope === 'custom') {
       if (selectedSeverity.length > 0) {
@@ -115,13 +138,28 @@ export default function ExportPage() {
   };
 
   const filteredIssues = useMemo(() => getFilteredIssues(), [
-    issues, selectedScope, selectedSeverity, selectedTypes,
+    issues, selectedBatchId, selectedScope, selectedSeverity, selectedTypes,
     selectedAssignee, selectedPlatform, selectedIssueStatus, products
   ]);
 
   const exportCount = useMemo(() => {
     const productCount = new Set(filteredIssues.map((i) => i.productId)).size;
     return { issueCount: filteredIssues.length, productCount };
+  }, [filteredIssues]);
+
+  const severityStats = useMemo(() => ({
+    critical: filteredIssues.filter((i) => i.severity === 'critical').length,
+    warning: filteredIssues.filter((i) => i.severity === 'warning').length,
+    info: filteredIssues.filter((i) => i.severity === 'info').length,
+  }), [filteredIssues]);
+
+  const progressStats = useMemo(() => {
+    const total = filteredIssues.length;
+    const pending = filteredIssues.filter((i) => i.status === 'pending').length;
+    const processing = filteredIssues.filter((i) => i.status === 'processing').length;
+    const resolved = filteredIssues.filter((i) => i.status === 'resolved').length;
+    const rate = total > 0 ? Math.round((resolved / total) * 100) : 0;
+    return { total, pending, processing, resolved, rate };
   }, [filteredIssues]);
 
   const buildExportData = (issuesToExport: typeof filteredIssues) => {
@@ -213,31 +251,100 @@ export default function ExportPage() {
   };
 
   const handleRedownload = (task: ExportTask) => {
-    if (!task.issueSnapshots || task.issueSnapshots.length === 0) {
-      alert('该导出任务的快照数据已丢失，无法重新下载');
-      return;
-    }
+    let exportData: Record<string, any>[] = [];
 
-    const exportData = task.issueSnapshots.map((snap) => ({
-      商品ID: snap.productId,
-      商品标题: snap.productTitle,
-      问题类型: ISSUE_TYPE_LABELS[snap.issueType as keyof typeof ISSUE_TYPE_LABELS] || snap.issueType,
-      严重程度: SEVERITY_LABELS[snap.severity as keyof typeof SEVERITY_LABELS] || snap.severity,
-      问题描述: snap.description,
-      修改建议: snap.suggestion,
-      处理状态: STATUS_LABELS[snap.status as keyof typeof STATUS_LABELS] || snap.status,
-      负责人: snap.assigneeName || '未分配',
-    }));
+    if (task.issueSnapshots && task.issueSnapshots.length > 0) {
+      exportData = task.issueSnapshots.map((snap) => ({
+        商品ID: snap.productId,
+        商品标题: snap.productTitle,
+        问题类型: ISSUE_TYPE_LABELS[snap.issueType as keyof typeof ISSUE_TYPE_LABELS] || snap.issueType,
+        严重程度: SEVERITY_LABELS[snap.severity as keyof typeof SEVERITY_LABELS] || snap.severity,
+        问题描述: snap.description,
+        修改建议: snap.suggestion,
+        处理状态: STATUS_LABELS[snap.status as keyof typeof STATUS_LABELS] || snap.status,
+        负责人: snap.assigneeName || '未分配',
+      }));
+    } else {
+      exportData = [
+        {
+          任务名称: task.name,
+          导出格式: task.format.toUpperCase(),
+          导出时间: formatDate(task.createdAt),
+          导出人: task.createdBy,
+          问题数量: task.issueCount,
+          商品数量: task.productCount,
+          备注: '快照数据已丢失，以上为任务元数据',
+        },
+      ];
+    }
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, '问题清单');
+    XLSX.utils.book_append_sheet(wb, ws, task.issueSnapshots && task.issueSnapshots.length > 0 ? '问题清单' : '导出任务信息');
+
+    if (task.issueSnapshots && task.issueSnapshots.length > 0) {
+      ws['!cols'] = [
+        { wch: 20 },
+        { wch: 40 },
+        { wch: 18 },
+        { wch: 10 },
+        { wch: 40 },
+        { wch: 40 },
+        { wch: 10 },
+        { wch: 12 },
+      ];
+    } else {
+      ws['!cols'] = [
+        { wch: 20 },
+        { wch: 15 },
+        { wch: 25 },
+        { wch: 15 },
+        { wch: 12 },
+        { wch: 12 },
+        { wch: 35 },
+      ];
+    }
+
     XLSX.writeFile(wb, `${task.name}.${task.format}`);
   };
 
   const handlePreviewTask = (task: ExportTask) => {
     setPreviewTask(task);
     setPreviewOpen(true);
+  };
+
+  const handleSavePreset = () => {
+    if (!presetName.trim()) return;
+
+    addFilterPreset({
+      name: presetName.trim(),
+      scope: selectedScope as ExportScope,
+      severityFilter: selectedScope === 'by_severity' || selectedScope === 'custom' ? selectedSeverity : undefined,
+      typeFilter: selectedScope === 'by_type' || selectedScope === 'custom' ? selectedTypes : undefined,
+      assigneeFilter: (selectedScope === 'by_assignee' || selectedScope === 'custom') && selectedAssignee !== 'all' ? selectedAssignee : undefined,
+      platformFilter: selectedScope === 'custom' && selectedPlatform !== 'all' ? selectedPlatform : undefined,
+      statusFilter: selectedScope === 'custom' && selectedIssueStatus !== 'all' ? selectedIssueStatus : undefined,
+    });
+
+    setPresetName('');
+    setShowSavePresetModal(false);
+  };
+
+  const handleSelectPreset = (presetId: string) => {
+    if (!presetId) {
+      setSelectedPresetId('');
+      return;
+    }
+
+    const preset = applyFilterPreset(presetId);
+    if (preset) {
+      setSelectedPresetId(presetId);
+      setSelectedSeverity(preset.severityFilter || []);
+      setSelectedTypes(preset.typeFilter || []);
+      setSelectedAssignee(preset.assigneeFilter || 'all');
+      setSelectedPlatform(preset.platformFilter || 'all');
+      setSelectedIssueStatus(preset.statusFilter || 'all');
+    }
   };
 
   const scopeOptions = [
@@ -269,12 +376,108 @@ export default function ExportPage() {
         <div className="col-span-2 space-y-5">
           <Card>
             <CardHeader>
-              <CardTitle>导出设置</CardTitle>
-              <CardDescription>
-                配置导出参数，生成可下载的问题清单
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>导出设置</CardTitle>
+                  <CardDescription>
+                    配置导出参数，生成可下载的问题清单
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowPresetDropdown(!showPresetDropdown)}
+                      className="h-9 px-3 pr-8 rounded-lg border border-gray-300 text-sm bg-white hover:border-gray-400 focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors text-left min-w-[140px] flex items-center justify-between"
+                    >
+                      <span className={cn('truncate', !selectedPresetId && 'text-gray-400')}>
+                        {selectedPresetId
+                          ? filterPresets.find((p) => p.id === selectedPresetId)?.name || '选择筛选方案'
+                          : '选择筛选方案'}
+                      </span>
+                      <ChevronRight className={cn(
+                        'absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none transition-transform',
+                        showPresetDropdown && 'rotate-[-90deg]'
+                      )} />
+                    </button>
+                    {showPresetDropdown && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-10"
+                          onClick={() => setShowPresetDropdown(false)}
+                        />
+                        <div className="absolute right-0 top-full mt-1 w-56 max-h-64 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+                          {filterPresets.length === 0 ? (
+                            <div className="px-3 py-4 text-sm text-gray-400 text-center">
+                              暂无保存的筛选方案
+                            </div>
+                          ) : (
+                            filterPresets.map((preset) => (
+                              <div
+                                key={preset.id}
+                                className={cn(
+                                  'flex items-center justify-between gap-2 px-3 py-2 hover:bg-gray-50 text-sm cursor-pointer transition-colors',
+                                  selectedPresetId === preset.id && 'bg-primary-50'
+                                )}
+                              >
+                                <span
+                                  className="flex-1 truncate text-gray-700"
+                                  onClick={() => {
+                                    handleSelectPreset(preset.id);
+                                    setShowPresetDropdown(false);
+                                  }}
+                                >
+                                  {preset.name}
+                                </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteFilterPreset(preset.id);
+                                    if (selectedPresetId === preset.id) {
+                                      setSelectedPresetId('');
+                                    }
+                                  }}
+                                  className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-danger-600 transition-colors"
+                                  title="删除方案"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowSavePresetModal(true)}
+                  >
+                    <Save className="w-4 h-4" />
+                    保存筛选方案
+                  </Button>
+                </div>
+              </div>
             </CardHeader>
             <CardContent className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  批次筛选
+                </label>
+                <select
+                  value={selectedBatchId}
+                  onChange={(e) => setSelectedBatchId(e.target.value)}
+                  className="w-full h-10 px-4 rounded-lg border border-gray-300 text-sm bg-white focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none"
+                >
+                  <option value="all">全部商品</option>
+                  {batches.map((batch) => (
+                    <option key={batch.id} value={batch.id}>
+                      {batch.name} ({batch.productCount}个商品)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   任务名称
@@ -743,7 +946,7 @@ export default function ExportPage() {
                     <span className="text-sm text-gray-600">严重问题</span>
                   </div>
                   <span className="font-bold text-danger-600">
-                    {issues.filter((i) => i.severity === 'critical').length}
+                    {severityStats.critical}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -752,7 +955,7 @@ export default function ExportPage() {
                     <span className="text-sm text-gray-600">警告问题</span>
                   </div>
                   <span className="font-bold text-warning-600">
-                    {issues.filter((i) => i.severity === 'warning').length}
+                    {severityStats.warning}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -761,7 +964,7 @@ export default function ExportPage() {
                     <span className="text-sm text-gray-600">提示信息</span>
                   </div>
                   <span className="font-bold text-blue-600">
-                    {issues.filter((i) => i.severity === 'info').length}
+                    {severityStats.info}
                   </span>
                 </div>
               </div>
@@ -778,27 +981,14 @@ export default function ExportPage() {
                   <div className="flex items-center justify-between text-sm mb-1.5">
                     <span className="text-gray-600">总体处理率</span>
                     <span className="font-medium text-gray-900">
-                      {issues.length > 0
-                        ? Math.round(
-                            (issues.filter((i) => i.status === 'resolved').length /
-                              issues.length) *
-                              100
-                          )
-                        : 0}
-                      %
+                      {progressStats.rate}%
                     </span>
                   </div>
                   <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-gradient-to-r from-success-400 to-success-600 rounded-full"
                       style={{
-                        width: `${
-                          issues.length > 0
-                            ? (issues.filter((i) => i.status === 'resolved').length /
-                                issues.length) *
-                              100
-                            : 0
-                        }%`,
+                        width: `${progressStats.rate}%`,
                       }}
                     />
                   </div>
@@ -806,19 +996,19 @@ export default function ExportPage() {
                 <div className="grid grid-cols-3 gap-2 text-center">
                   <div className="p-2 bg-gray-50 rounded-lg">
                     <p className="text-lg font-bold text-gray-900">
-                      {issues.filter((i) => i.status === 'pending').length}
+                      {progressStats.pending}
                     </p>
                     <p className="text-xs text-gray-500">待处理</p>
                   </div>
                   <div className="p-2 bg-gray-50 rounded-lg">
                     <p className="text-lg font-bold text-warning-600">
-                      {issues.filter((i) => i.status === 'processing').length}
+                      {progressStats.processing}
                     </p>
                     <p className="text-xs text-gray-500">处理中</p>
                   </div>
                   <div className="p-2 bg-gray-50 rounded-lg">
                     <p className="text-lg font-bold text-success-600">
-                      {issues.filter((i) => i.status === 'resolved').length}
+                      {progressStats.resolved}
                     </p>
                     <p className="text-xs text-gray-500">已完成</p>
                   </div>
@@ -942,6 +1132,42 @@ export default function ExportPage() {
             )}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        isOpen={showSavePresetModal}
+        onClose={() => setShowSavePresetModal(false)}
+        title="保存筛选方案"
+        size="sm"
+        footer={
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={() => setShowSavePresetModal(false)}>
+              取消
+            </Button>
+            <Button variant="primary" onClick={handleSavePreset} disabled={!presetName.trim()}>
+              保存
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              方案名称
+            </label>
+            <input
+              type="text"
+              placeholder="如：618大促严重问题"
+              value={presetName}
+              onChange={(e) => setPresetName(e.target.value)}
+              className="w-full h-10 px-4 rounded-lg border border-gray-300 text-sm focus:border-primary-500 focus:ring-2 focus:ring-primary-500/20 focus:outline-none transition-colors"
+              autoFocus
+            />
+          </div>
+          <p className="text-xs text-gray-500">
+            将保存当前所有筛选条件（导出范围、严重程度、问题类型、负责人、平台、状态）
+          </p>
+        </div>
       </Modal>
     </div>
   );

@@ -21,6 +21,14 @@ export interface LogisticsInfo {
   shippingFee?: number;
 }
 
+export interface ImportBatch {
+  id: string;
+  name: string;
+  importedAt: string;
+  productCount: number;
+  platform?: string;
+}
+
 export interface Product {
   id: string;
   title: string;
@@ -34,6 +42,7 @@ export interface Product {
   logistics: LogisticsInfo;
   platform: string;
   category?: string;
+  batchId: string;
   createdAt: string;
   updatedAt: string;
 }
